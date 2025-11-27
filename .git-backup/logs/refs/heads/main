@@ -1,0 +1,15 @@
+0000000000000000000000000000000000000000 4fd6f2091fa63b3c4b9d0d7976fc69016df5677a Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764188577 +1100	commit (initial): Initial commit
+4fd6f2091fa63b3c4b9d0d7976fc69016df5677a 4fd6f2091fa63b3c4b9d0d7976fc69016df5677a Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764188745 +1100	Branch: renamed refs/heads/main to refs/heads/main
+4fd6f2091fa63b3c4b9d0d7976fc69016df5677a 2e2c6145d8a73c546031ecb0872dacd73bbfd1dd Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764191326 +1100	commit: Allow iframe embedding for Qualtrics
+2e2c6145d8a73c546031ecb0872dacd73bbfd1dd cdaaa43be51fc5c50bec41a77a7e9385a053475b Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764191593 +1100	commit: Fix CSP for Qualtrics iframe
+cdaaa43be51fc5c50bec41a77a7e9385a053475b 065795fcb94f105e4f2ac3c855e2fbca959a8c56 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764192712 +1100	commit: Move CSP + iframe headers to next.config.ts
+065795fcb94f105e4f2ac3c855e2fbca959a8c56 b37c6747ca34018c1963f737e330ff9acfd6806e Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764197457 +1100	commit: Add chat_complete summary + postMessage to Qualtrics
+b37c6747ca34018c1963f737e330ff9acfd6806e ae9f74018d251d00a7434aef11fab70ba1feaf27 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764199988 +1100	commit: Add debug log for chat_complete summary
+ae9f74018d251d00a7434aef11fab70ba1feaf27 84b291c93860664e9363a35225d7cfd9d9a1b4c2 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764204829 +1100	commit: Add interview status banner to chat
+84b291c93860664e9363a35225d7cfd9d9a1b4c2 e78288be8627227b038f196f0dad22a300f75243 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764205285 +1100	commit: Polish chat UI with roles and auto scroll
+e78288be8627227b038f196f0dad22a300f75243 434e39fa05215bef10c729ac01a39046df568461 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764205781 +1100	commit: Polish chat UI with avatars and typing indicator
+434e39fa05215bef10c729ac01a39046df568461 1ad0b1da9546e9a7b79ea2421305afbefeb63658 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764211256 +1100	commit: Disable paste in chat input
+1ad0b1da9546e9a7b79ea2421305afbefeb63658 434e39fa05215bef10c729ac01a39046df568461 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764211365 +1100	reset: moving to HEAD~1
+434e39fa05215bef10c729ac01a39046df568461 0bdd49aef72f9587857dae3160813a1d72dce027 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764211377 +1100	commit: Disable paste in chat input
+0bdd49aef72f9587857dae3160813a1d72dce027 434e39fa05215bef10c729ac01a39046df568461 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764211581 +1100	reset: moving to HEAD~1
+434e39fa05215bef10c729ac01a39046df568461 090c87255488b5e23fe88d66e94b17078236b962 Michael Cahalane <z3425362@L-JKTXMM43Q6.local> 1764211595 +1100	commit: Switch fetchThread.ts to environment variable
