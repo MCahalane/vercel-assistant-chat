@@ -386,7 +386,7 @@ export default function Home() {
             flex: 1,
             padding: 10,
             borderRadius: 6,
-            border: "1px solid "#ccc",
+            border: "1px solid #ccc",
             fontSize: 16,
           }}
         />
