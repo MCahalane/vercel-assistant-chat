@@ -33,6 +33,18 @@ export default function Home() {
     }
   }, [messages, isLoading]);
 
+  // Disable right-click context menu anywhere inside this page (iframe)
+  useEffect(() => {
+    const handler = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    document.addEventListener("contextmenu", handler);
+    return () => {
+      document.removeEventListener("contextmenu", handler);
+    };
+  }, []);
+
   function sendChatCompletionSummary(args: {
     threadId: string | null;
     messageCount: number;
