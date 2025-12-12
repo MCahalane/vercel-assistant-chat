@@ -514,7 +514,7 @@ export default function Home() {
         fontFamily: "system-ui, Arial",
       }}
     >
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Interview</h1>
+      <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Chat</h1>
 
       {/* Interview status banner inside the iframe */}
       <p
