@@ -12,6 +12,9 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   // Banner status inside the iframe
   const [interviewStatus, setInterviewStatus] = useState(
@@ -210,6 +213,69 @@ export default function Home() {
     if (e.key === "Enter") sendMessage();
   }
 
+  // ----- Voice recording helpers -----
+
+  async function startRecording() {
+    if (isRecording) return;
+    if (typeof window === "undefined") return;
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.error("Audio recording not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const mediaRecorder = new MediaRecorder(stream);
+      recordedChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        // Stop all tracks so the mic is released
+        stream.getTracks().forEach((track) => track.stop());
+
+        const audioBlob = new Blob(recordedChunksRef.current, {
+          type: "audio/webm",
+        });
+
+        console.log("Recorded audio Blob:", audioBlob);
+        // In later steps, we'll send this Blob to the backend for transcription.
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start();
+      setIsRecording(true);
+
+      // Auto-stop after 180 seconds (180000 ms)
+      setTimeout(() => {
+        if (
+          mediaRecorderRef.current === mediaRecorder &&
+          mediaRecorder.state === "recording"
+        ) {
+          mediaRecorder.stop();
+          setIsRecording(false);
+        }
+      }, 180000);
+    } catch (error) {
+      console.error("Error starting audio recording:", error);
+      setIsRecording(false);
+    }
+  }
+
+  function stopRecording() {
+    const mediaRecorder = mediaRecorderRef.current;
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+    }
+    setIsRecording(false);
+  }
+
   // Small helpers for avatar style
   const avatarBase: React.CSSProperties = {
     width: 28,
@@ -403,6 +469,27 @@ export default function Home() {
           }}
         />
         <button
+          type="button"
+          disabled={isLoading}
+          onClick={() => {
+            if (isRecording) {
+              stopRecording();
+            } else {
+              startRecording();
+            }
+          }}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 6,
+            border: "1px solid #ccc",
+            background: isRecording ? "#fee2e2" : "#f9fafb",
+            fontSize: 18,
+            cursor: isLoading ? "default" : "pointer",
+          }}
+        >
+          {isRecording ? "⏹️" : "🎤"}
+        </button>
+        <button
           onClick={sendMessage}
           disabled={isLoading || !input.trim()}
           style={{
@@ -422,3 +509,4 @@ export default function Home() {
     </main>
   );
 }
+
