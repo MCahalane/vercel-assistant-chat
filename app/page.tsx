@@ -39,6 +39,9 @@ export default function Home() {
   // Chat container ref for auto scroll
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Textarea ref for auto-expanding input
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   // Auto scroll to latest message when messages or loading state change
   useEffect(() => {
     const container = chatContainerRef.current;
@@ -58,6 +61,17 @@ export default function Home() {
       document.removeEventListener("contextmenu", handler);
     };
   }, []);
+
+  // Auto-expand textarea when input changes
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    el.style.height = "0px"; // reset to measure scrollHeight accurately
+    const maxHeight = 200; // px
+    const newHeight = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${newHeight}px`;
+  }, [input]);
 
   // ----- Qualtrics summary helpers -----
 
@@ -232,8 +246,12 @@ export default function Home() {
     }
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") sendMessage();
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter sends, Shift+Enter inserts a newline
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   }
 
   // ----- Waveform animation (real audio if available) -----
@@ -693,8 +711,8 @@ export default function Home() {
       )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
@@ -706,6 +724,11 @@ export default function Home() {
             borderRadius: 6,
             border: "1px solid #ccc",
             fontSize: 16,
+            lineHeight: 1.4,
+            minHeight: 60,
+            maxHeight: 200,
+            resize: "none",
+            overflowY: "auto",
           }}
         />
         <button
