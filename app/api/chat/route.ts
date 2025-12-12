@@ -8,8 +8,14 @@ const openai = new OpenAI({
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
     const message = body?.message;
     const incomingThreadId = body?.threadId;
+    const rawInputMode = body?.inputMode;
+
+    // Normalise inputMode to "text" | "audio"
+    const inputMode: "text" | "audio" =
+      rawInputMode === "audio" ? "audio" : "text";
 
     if (!message || typeof message !== "string") {
       return NextResponse.json(
@@ -38,20 +44,35 @@ export async function POST(req: Request) {
       ? await openai.beta.threads.retrieve(threadId)
       : await openai.beta.threads.create();
 
-    // Add user message
+    console.log("New user message", {
+      threadId: thread.id,
+      inputMode,
+    });
+
+    // Add user message, tagged with inputMode in metadata
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: message,
+      metadata: {
+        inputMode,
+      },
     });
 
     // Create run and wait for completion (official helper)
     const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
       assistant_id: assistantId,
+      metadata: {
+        last_user_input_mode: inputMode,
+      },
     });
 
     if (run.status !== "completed") {
       return NextResponse.json(
-        { error: run.last_error?.message || `Run ended with status ${run.status}` },
+        {
+          error:
+            run.last_error?.message ||
+            `Run ended with status ${run.status}`,
+        },
         { status: 500 }
       );
     }
@@ -75,6 +96,7 @@ export async function POST(req: Request) {
       threadId: run.thread_id,
     });
   } catch (err: any) {
+    console.error("Chat route error:", err);
     return NextResponse.json(
       { error: err?.message || "Server error" },
       { status: 500 }

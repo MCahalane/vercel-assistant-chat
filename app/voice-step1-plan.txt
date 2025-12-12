@@ -1,0 +1,12 @@
+Voice Input Integration – Step 1 Plan
+
+Frontend chat UI file: app/page.tsx
+Backend chat API route file: app/api/route.ts
+Qualtrics iframe code location: Question QID10 (HTML view)
+Mic button location: to the left of the Send button.
+Max recording duration: 180 seconds.
+Transcript behaviour: insert into text box for participant to edit before sending.
+Audio storage: audio is never stored; it is used only for transcription and then discarded.
+Message tagging: each user message will include inputMode = "text" or "audio".
+
+

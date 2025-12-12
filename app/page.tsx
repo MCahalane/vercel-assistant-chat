@@ -7,14 +7,25 @@ type ChatMsg = {
   text: string;
 };
 
+type InputMode = "text" | "audio";
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [inputMode, setInputMode] = useState<InputMode>("text");
+
+  // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+
+  // Real audio waveform
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
 
   // Banner status inside the iframe
   const [interviewStatus, setInterviewStatus] = useState(
@@ -47,6 +58,8 @@ export default function Home() {
       document.removeEventListener("contextmenu", handler);
     };
   }, []);
+
+  // ----- Qualtrics summary helpers -----
 
   function sendChatCompletionSummary(args: {
     threadId: string | null;
@@ -121,6 +134,8 @@ export default function Home() {
     }
   }
 
+  // ----- Chat sending -----
+
   async function sendMessage() {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
@@ -143,8 +158,13 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      const payload: { message: string; threadId?: string } = {
+      const payload: {
+        message: string;
+        threadId?: string;
+        inputMode: InputMode;
+      } = {
         message: trimmed,
+        inputMode,
       };
 
       if (threadId && threadId.startsWith("thread_")) {
@@ -177,6 +197,9 @@ export default function Home() {
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
+
+      // After sending one message (of either type), reset to "text"
+      setInputMode("text");
 
       // Update threadId only if server sent a real one
       let finalThreadId = threadId;
@@ -213,6 +236,118 @@ export default function Home() {
     if (e.key === "Enter") sendMessage();
   }
 
+  // ----- Waveform animation (real audio if available) -----
+
+  function startWaveformAnimation() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    const draw = () => {
+      const analyser = analyserRef.current;
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#0b1120";
+      ctx.fillRect(0, 0, width, height);
+
+      if (analyser) {
+        // Real audio-driven waveform
+        const bufferLength = analyser.fftSize;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteTimeDomainData(dataArray);
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#e5e7eb";
+        ctx.beginPath();
+
+        const sliceWidth = width / bufferLength;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0; // 0–2
+          const y = (v * height) / 2; // center around middle
+
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+
+          x += sliceWidth;
+        }
+
+        ctx.stroke();
+      } else {
+        // Fallback: fake random bars (shouldn't normally be used now)
+        const barCount = 80;
+        const step = width / barCount;
+
+        ctx.strokeStyle = "#e5e7eb";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        for (let i = 0; i < barCount; i++) {
+          const x = i * step + step / 2;
+          const maxBarHeight = height * 0.9;
+          const minBarHeight = height * 0.2;
+          const barHeight =
+            minBarHeight +
+            Math.random() * (maxBarHeight - minBarHeight); // 20–90% of height
+
+          const yTop = height / 2 - barHeight / 2;
+          const yBottom = height / 2 + barHeight / 2;
+
+          ctx.moveTo(x, yTop);
+          ctx.lineTo(x, yBottom);
+        }
+
+        ctx.stroke();
+      }
+
+      animationFrameRef.current = requestAnimationFrame(draw);
+    };
+
+    draw();
+  }
+
+  function stopWaveformAnimation() {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#0b1120";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // Start/stop animation when isRecording changes *after* canvas exists
+  useEffect(() => {
+    if (isRecording) {
+      startWaveformAnimation();
+    } else {
+      stopWaveformAnimation();
+    }
+
+    return () => {
+      stopWaveformAnimation();
+    };
+  }, [isRecording]);
+
   // ----- Voice recording helpers -----
 
   async function startRecording() {
@@ -227,6 +362,28 @@ export default function Home() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+      // Set up Web Audio analyser for real-time waveform
+      const AudioContextClass =
+        window.AudioContext ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).webkitAudioContext;
+
+      if (AudioContextClass) {
+        const audioContext = new AudioContextClass();
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 2048; // good resolution for waveform
+
+        source.connect(analyser);
+
+        audioContextRef.current = audioContext;
+        analyserRef.current = analyser;
+      } else {
+        console.warn("AudioContext not available; using fake waveform.");
+        audioContextRef.current = null;
+        analyserRef.current = null;
+      }
+
       const mediaRecorder = new MediaRecorder(stream);
       recordedChunksRef.current = [];
 
@@ -240,19 +397,39 @@ export default function Home() {
         // Stop all tracks so the mic is released
         stream.getTracks().forEach((track) => track.stop());
 
+        // Close audio context
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+        }
+        analyserRef.current = null;
+
         const audioBlob = new Blob(recordedChunksRef.current, {
           type: "audio/webm",
         });
 
         console.log("Recorded audio Blob:", audioBlob);
-        // In later steps, we'll send this Blob to the backend for transcription.
+
+        // Send the audio to the backend for transcription
+        (async () => {
+          const transcript = await sendAudioForTranscription(audioBlob);
+          if (transcript) {
+            setInput((prev) =>
+              prev && prev.trim().length > 0
+                ? `${prev.trim()} ${transcript}`
+                : transcript
+            );
+            // Mark this next message as audio-origin
+            setInputMode("audio");
+          }
+        })();
       };
 
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start();
       setIsRecording(true);
 
-      // Auto-stop after 180 seconds (180000 ms)
+      // Auto-stop after 180 seconds
       setTimeout(() => {
         if (
           mediaRecorderRef.current === mediaRecorder &&
@@ -273,10 +450,48 @@ export default function Home() {
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
     }
+
+    // Close audio context when user manually stops
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+
     setIsRecording(false);
   }
 
-  // Small helpers for avatar style
+  // ----- Send audio to backend for transcription -----
+
+  async function sendAudioForTranscription(
+    audioBlob: Blob
+  ): Promise<string | null> {
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording.webm");
+
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("Transcription failed:", data.error);
+        return null;
+      }
+
+      console.log("Transcript:", data.transcript);
+      return data.transcript || null;
+    } catch (err) {
+      console.error("Failed to send audio:", err);
+      return null;
+    }
+  }
+
+  // ----- UI Rendering -----
+
   const avatarBase: React.CSSProperties = {
     width: 28,
     height: 28,
@@ -299,9 +514,7 @@ export default function Home() {
         fontFamily: "system-ui, Arial",
       }}
     >
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>
-        My OpenAI Assistant Chat
-      </h1>
+      <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Interview</h1>
 
       {/* Interview status banner inside the iframe */}
       <p
@@ -452,6 +665,33 @@ export default function Home() {
         )}
       </div>
 
+      {/* Recording notice + waveform */}
+      {isRecording && (
+        <div style={{ marginTop: 12 }}>
+          <p
+            style={{
+              marginBottom: 8,
+              fontSize: 13,
+              color: "#4b5563",
+            }}
+          >
+            Recording… please speak clearly into your microphone.
+          </p>
+          <canvas
+            ref={canvasRef}
+            width={800}
+            height={50}
+            style={{
+              width: "100%",
+              height: 50,
+              background: "#0b1120",
+              borderRadius: 12,
+              display: "block",
+            }}
+          />
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <input
           type="text"
@@ -509,4 +749,3 @@ export default function Home() {
     </main>
   );
 }
-
