@@ -20,6 +20,7 @@ export default function Home() {
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingStartTimeRef = useRef<number | null>(null);
 
   // Real audio waveform
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -301,7 +302,7 @@ export default function Home() {
 
         ctx.stroke();
       } else {
-        // Fallback: fake random bars (shouldn't normally be used now)
+        // Fallback: fake random bars
         const barCount = 80;
         const step = width / barCount;
 
@@ -315,7 +316,7 @@ export default function Home() {
           const minBarHeight = height * 0.2;
           const barHeight =
             minBarHeight +
-            Math.random() * (maxBarHeight - minBarHeight); // 20–90% of height
+            Math.random() * (maxBarHeight - minBarHeight);
 
           const yTop = height / 2 - barHeight / 2;
           const yBottom = height / 2 + barHeight / 2;
@@ -404,6 +405,7 @@ export default function Home() {
 
       const mediaRecorder = new MediaRecorder(stream);
       recordedChunksRef.current = [];
+      recordingStartTimeRef.current = Date.now();
 
       mediaRecorder.ondataavailable = (event: BlobEvent) => {
         if (event.data && event.data.size > 0) {
@@ -421,6 +423,27 @@ export default function Home() {
           audioContextRef.current = null;
         }
         analyserRef.current = null;
+
+        // Check how long the recording lasted
+        const endTime = Date.now();
+        const durationMs =
+          recordingStartTimeRef.current != null
+            ? endTime - recordingStartTimeRef.current
+            : null;
+        recordingStartTimeRef.current = null;
+
+        // If the recording was extremely short, treat it as unusable
+        if (!durationMs || durationMs < 800) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text:
+                "Sorry, I couldn't clearly understand that audio. Please try again or type your message.",
+            },
+          ]);
+          return;
+        }
 
         const audioBlob = new Blob(recordedChunksRef.current, {
           type: "audio/webm",
