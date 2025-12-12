@@ -353,7 +353,7 @@ export default function Home() {
     ctx.fillRect(0, 0, width, height);
   }
 
-  // Start/stop animation when isRecording changes *after* canvas exists
+  // Start/stop animation when isRecording changes after canvas exists
   useEffect(() => {
     if (isRecording) {
       startWaveformAnimation();
@@ -431,15 +431,27 @@ export default function Home() {
         // Send the audio to the backend for transcription
         (async () => {
           const transcript = await sendAudioForTranscription(audioBlob);
-          if (transcript) {
-            setInput((prev) =>
-              prev && prev.trim().length > 0
-                ? `${prev.trim()} ${transcript}`
-                : transcript
-            );
-            // Mark this next message as audio-origin
-            setInputMode("audio");
+
+          // If we got nothing useful back, show a gentle assistant message
+          if (!transcript || !transcript.trim()) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                text:
+                  "Sorry, I couldn't clearly understand that audio. Please try again or type your message.",
+              },
+            ]);
+            return;
           }
+
+          setInput((prev) =>
+            prev && prev.trim().length > 0
+              ? `${prev.trim()} ${transcript}`
+              : transcript
+          );
+          // Mark this next message as audio-origin
+          setInputMode("audio");
         })();
       };
 
