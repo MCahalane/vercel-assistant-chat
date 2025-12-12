@@ -22,11 +22,12 @@ export default function Home() {
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingStartTimeRef = useRef<number | null>(null);
 
-  // Real audio waveform
+  // Real audio waveform + loudness tracking
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const maxAmplitudeRef = useRef<number>(0); // tracks loudest deviation during recording
 
   // Banner status inside the iframe
   const [interviewStatus, setInterviewStatus] = useState(
@@ -286,9 +287,16 @@ export default function Home() {
 
         const sliceWidth = width / bufferLength;
         let x = 0;
+        let frameMaxDeviation = 0;
 
         for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0; // 0–2
+          const v = dataArray[i] / 128.0; // 0–2, center ~1
+          const deviation = Math.abs(v - 1); // how far from center
+
+          if (deviation > frameMaxDeviation) {
+            frameMaxDeviation = deviation;
+          }
+
           const y = (v * height) / 2; // center around middle
 
           if (i === 0) {
@@ -298,6 +306,11 @@ export default function Home() {
           }
 
           x += sliceWidth;
+        }
+
+        // Track global max amplitude during this recording
+        if (frameMaxDeviation > maxAmplitudeRef.current) {
+          maxAmplitudeRef.current = frameMaxDeviation;
         }
 
         ctx.stroke();
@@ -381,6 +394,10 @@ export default function Home() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+      // Reset loudness tracking at the start of each recording
+      maxAmplitudeRef.current = 0;
+      recordingStartTimeRef.current = Date.now();
+
       // Set up Web Audio analyser for real-time waveform
       const AudioContextClass =
         window.AudioContext ||
@@ -405,7 +422,6 @@ export default function Home() {
 
       const mediaRecorder = new MediaRecorder(stream);
       recordedChunksRef.current = [];
-      recordingStartTimeRef.current = Date.now();
 
       mediaRecorder.ondataavailable = (event: BlobEvent) => {
         if (event.data && event.data.size > 0) {
@@ -432,8 +448,10 @@ export default function Home() {
             : null;
         recordingStartTimeRef.current = null;
 
-        // If the recording was extremely short, treat it as unusable
-        if (!durationMs || durationMs < 800) {
+        const maxAmplitude = maxAmplitudeRef.current;
+        maxAmplitudeRef.current = 0;
+
+        const showCouldNotUnderstand = () => {
           setMessages((prev) => [
             ...prev,
             {
@@ -442,6 +460,14 @@ export default function Home() {
                 "Sorry, I couldn't clearly understand that audio. Please try again or type your message.",
             },
           ]);
+        };
+
+        // If the recording was extremely short OR very quiet, treat as unusable
+        const TOO_SHORT_MS = 800;
+        const TOO_QUIET_THRESHOLD = 0.08; // tweakable: 0 (silent) to ~1 (very loud)
+
+        if (!durationMs || durationMs < TOO_SHORT_MS || maxAmplitude < TOO_QUIET_THRESHOLD) {
+          showCouldNotUnderstand();
           return;
         }
 
@@ -457,14 +483,7 @@ export default function Home() {
 
           // If we got nothing useful back, show a gentle assistant message
           if (!transcript || !transcript.trim()) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant",
-                text:
-                  "Sorry, I couldn't clearly understand that audio. Please try again or type your message.",
-              },
-            ]);
+            showCouldNotUnderstand();
             return;
           }
 
