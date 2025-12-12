@@ -532,6 +532,15 @@ export default function Home() {
         fontFamily: "system-ui, Arial",
       }}
     >
+      {/* Pulsing animation for recording mic button */}
+      <style>{`
+        @keyframes pulseRecording {
+          0% { transform: scale(1); opacity: 0.9; }
+          50% { transform: scale(1.06); opacity: 1; }
+          100% { transform: scale(1); opacity: 0.9; }
+        }
+      `}</style>
+
       <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Chat</h1>
 
       {/* Interview status banner inside the iframe */}
@@ -745,9 +754,14 @@ export default function Home() {
             padding: "10px 12px",
             borderRadius: 6,
             border: "1px solid #ccc",
-            background: isRecording ? "#fee2e2" : "#f9fafb",
+            background: isRecording ? "#b91c1c" : "#f9fafb",
+            color: isRecording ? "white" : "inherit",
             fontSize: 18,
             cursor: isLoading ? "default" : "pointer",
+            animation: isRecording
+              ? "pulseRecording 1.2s ease-in-out infinite"
+              : "none",
+            transformOrigin: "center",
           }}
         >
           {isRecording ? "⏹️" : "🎤"}
