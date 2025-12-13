@@ -37,7 +37,7 @@ export default function Home() {
 
   // Banner status inside the iframe
   const [interviewStatus, setInterviewStatus] = useState(
-    "Interview in progress…"
+    "Chat in progress…"
   );
 
   // Tracking for Qualtrics summary
@@ -266,7 +266,7 @@ export default function Home() {
       }
 
       setInterviewStatus(
-        "Interview complete. You may return to the survey and press Next."
+        "Chat complete. You may return to the survey and press Next."
       );
 
       sendChatCompletionSummary({
