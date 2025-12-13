@@ -83,9 +83,15 @@ export default function Home() {
 
   // Transcript helpers (continuous recording)
 
-  async function ensureTranscriptStarted() {
-    if (transcriptReadyRef.current) return;
-    if (transcriptStartAttemptedRef.current) return;
+  async function ensureTranscriptStarted(): Promise<string | null> {
+    // If we already have an id in the ref, we are done
+    if (transcriptIdRef.current) {
+      transcriptReadyRef.current = true;
+      return transcriptIdRef.current;
+    }
+
+    if (transcriptReadyRef.current) return transcriptIdRef.current;
+    if (transcriptStartAttemptedRef.current) return transcriptIdRef.current;
 
     transcriptStartAttemptedRef.current = true;
 
@@ -102,20 +108,21 @@ export default function Home() {
 
       if (!res.ok) {
         transcriptStartAttemptedRef.current = false;
-        return;
+        return null;
       }
 
       if (data && typeof data.transcriptId === "string" && data.transcriptId) {
-        // Store in both state (for visibility if needed) and ref (for immediate use)
-        setTranscriptId(data.transcriptId);
         transcriptIdRef.current = data.transcriptId;
-
+        setTranscriptId(data.transcriptId);
         transcriptReadyRef.current = true;
-      } else {
-        transcriptStartAttemptedRef.current = false;
+        return data.transcriptId;
       }
+
+      transcriptStartAttemptedRef.current = false;
+      return null;
     } catch {
       transcriptStartAttemptedRef.current = false;
+      return null;
     }
   }
 
@@ -127,11 +134,12 @@ export default function Home() {
     const cleanText = (args.text || "").trim();
     if (!cleanText) return;
 
-    if (!transcriptReadyRef.current || !transcriptIdRef.current) {
-      await ensureTranscriptStarted();
+    let id = transcriptIdRef.current;
+
+    if (!id) {
+      id = await ensureTranscriptStarted();
     }
 
-    const id = transcriptIdRef.current;
     if (!id) return;
 
     try {
@@ -152,7 +160,7 @@ export default function Home() {
 
   // Start transcript as early as possible
   useEffect(() => {
-    ensureTranscriptStarted();
+    void ensureTranscriptStarted();
   }, []);
 
   // Qualtrics summary helpers
