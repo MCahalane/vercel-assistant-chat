@@ -17,6 +17,12 @@ export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
+  // Transcript recording (Blob)
+  const [transcriptId, setTranscriptId] = useState<string | null>(null);
+  const transcriptIdRef = useRef<string | null>(null);
+  const transcriptReadyRef = useRef(false);
+  const transcriptStartAttemptedRef = useRef(false);
+
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -27,7 +33,7 @@ export default function Home() {
   const animationFrameRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const maxAmplitudeRef = useRef<number>(0); // tracks loudest deviation during recording
+  const maxAmplitudeRef = useRef<number>(0);
 
   // Banner status inside the iframe
   const [interviewStatus, setInterviewStatus] = useState(
@@ -41,7 +47,7 @@ export default function Home() {
   // Chat container ref for auto scroll
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Textarea ref for auto-expanding input
+  // Textarea ref for auto expanding input
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Auto scroll to latest message when messages or loading state change
@@ -52,7 +58,7 @@ export default function Home() {
     }
   }, [messages, isLoading]);
 
-  // Disable right-click context menu anywhere inside this page (iframe)
+  // Disable right click context menu anywhere inside this page (iframe)
   useEffect(() => {
     const handler = (event: MouseEvent) => {
       event.preventDefault();
@@ -64,18 +70,92 @@ export default function Home() {
     };
   }, []);
 
-  // Auto-expand textarea when input changes
+  // Auto expand textarea when input changes
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
 
-    el.style.height = "0px"; // reset to measure scrollHeight accurately
-    const maxHeight = 200; // px
+    el.style.height = "0px";
+    const maxHeight = 200;
     const newHeight = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${newHeight}px`;
   }, [input]);
 
-  // ----- Qualtrics summary helpers -----
+  // Transcript helpers (continuous recording)
+
+  async function ensureTranscriptStarted() {
+    if (transcriptReadyRef.current) return;
+    if (transcriptStartAttemptedRef.current) return;
+
+    transcriptStartAttemptedRef.current = true;
+
+    try {
+      const res = await fetch("/api/transcript/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startedAt: new Date().toISOString(),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        transcriptStartAttemptedRef.current = false;
+        return;
+      }
+
+      if (data && typeof data.transcriptId === "string" && data.transcriptId) {
+        // Store in both state (for visibility if needed) and ref (for immediate use)
+        setTranscriptId(data.transcriptId);
+        transcriptIdRef.current = data.transcriptId;
+
+        transcriptReadyRef.current = true;
+      } else {
+        transcriptStartAttemptedRef.current = false;
+      }
+    } catch {
+      transcriptStartAttemptedRef.current = false;
+    }
+  }
+
+  async function appendTranscriptLine(args: {
+    role: "user" | "assistant";
+    text: string;
+    ts: string;
+  }) {
+    const cleanText = (args.text || "").trim();
+    if (!cleanText) return;
+
+    if (!transcriptReadyRef.current || !transcriptIdRef.current) {
+      await ensureTranscriptStarted();
+    }
+
+    const id = transcriptIdRef.current;
+    if (!id) return;
+
+    try {
+      await fetch("/api/transcript/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcriptId: id,
+          role: args.role,
+          text: cleanText,
+          ts: args.ts,
+        }),
+      });
+    } catch {
+      // Intentionally silent. We do not want to interrupt the chat UI.
+    }
+  }
+
+  // Start transcript as early as possible
+  useEffect(() => {
+    ensureTranscriptStarted();
+  }, []);
+
+  // Qualtrics summary helpers
 
   function sendChatCompletionSummary(args: {
     threadId: string | null;
@@ -97,8 +177,6 @@ export default function Home() {
     };
 
     try {
-      console.log("DEBUG: Sending chat_complete summary:", payload);
-
       if (window.parent && window.parent !== window) {
         window.parent.postMessage(payload, "*");
       }
@@ -134,12 +212,10 @@ export default function Home() {
         );
       }
 
-      // Update the banner inside the iframe
       setInterviewStatus(
         "Interview complete. You may return to the survey and press Next."
       );
 
-      // Send summary up to Qualtrics
       sendChatCompletionSummary({
         threadId: summaryArgs.threadId,
         messageCount: summaryArgs.messageCount,
@@ -150,18 +226,16 @@ export default function Home() {
     }
   }
 
-  // ----- Chat sending -----
+  // Chat sending
 
   async function sendMessage() {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
-    // Start the timer on the first user message
     if (!chatStartTimeRef.current) {
       chatStartTimeRef.current = Date.now();
     }
 
-    // For counting, capture the current messages array once at the start
     const currentMessages = messages;
     const existingUserCount = currentMessages.filter(
       (m) => m.role === "user"
@@ -172,6 +246,13 @@ export default function Home() {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
+
+    // Record user line immediately
+    void appendTranscriptLine({
+      role: "user",
+      text: trimmed,
+      ts: new Date().toISOString(),
+    });
 
     try {
       const payload: {
@@ -202,6 +283,13 @@ export default function Home() {
           ...prev,
           { role: "assistant", text: errText },
         ]);
+
+        void appendTranscriptLine({
+          role: "assistant",
+          text: errText,
+          ts: new Date().toISOString(),
+        });
+
         setIsLoading(false);
         return;
       }
@@ -214,10 +302,15 @@ export default function Home() {
 
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // After sending one message (of either type), reset to "text"
+      // Record assistant line immediately
+      void appendTranscriptLine({
+        role: "assistant",
+        text: assistantText,
+        ts: new Date().toISOString(),
+      });
+
       setInputMode("text");
 
-      // Update threadId only if server sent a real one
       let finalThreadId = threadId;
       if (
         typeof data.threadId === "string" &&
@@ -229,34 +322,40 @@ export default function Home() {
 
       const totalMessagesAfter = currentMessages.length + 2;
 
-      // Check if this message ends the interview; if yes, post the summary
       checkForInterviewEnd(assistantText, {
         threadId: finalThreadId || null,
         messageCount: totalMessagesAfter,
         userMessageCount: newUserMessageCount,
       });
     } catch (e: any) {
+      const msg = e?.message || "Network error.";
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: e?.message || "Network error.",
+          text: msg,
         },
       ]);
+
+      void appendTranscriptLine({
+        role: "assistant",
+        text: msg,
+        ts: new Date().toISOString(),
+      });
     } finally {
       setIsLoading(false);
     }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter sends, Shift+Enter inserts a newline
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   }
 
-  // ----- Waveform animation (real audio if available) -----
+  // Waveform animation (real audio if available)
 
   function startWaveformAnimation() {
     const canvas = canvasRef.current;
@@ -276,7 +375,6 @@ export default function Home() {
       ctx.fillRect(0, 0, width, height);
 
       if (analyser) {
-        // Real audio-driven waveform
         const bufferLength = analyser.fftSize;
         const dataArray = new Uint8Array(bufferLength);
         analyser.getByteTimeDomainData(dataArray);
@@ -290,14 +388,14 @@ export default function Home() {
         let frameMaxDeviation = 0;
 
         for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0; // 0–2, center ~1
-          const deviation = Math.abs(v - 1); // how far from center
+          const v = dataArray[i] / 128.0;
+          const deviation = Math.abs(v - 1);
 
           if (deviation > frameMaxDeviation) {
             frameMaxDeviation = deviation;
           }
 
-          const y = (v * height) / 2; // center around middle
+          const y = (v * height) / 2;
 
           if (i === 0) {
             ctx.moveTo(x, y);
@@ -308,14 +406,12 @@ export default function Home() {
           x += sliceWidth;
         }
 
-        // Track global max amplitude during this recording
         if (frameMaxDeviation > maxAmplitudeRef.current) {
           maxAmplitudeRef.current = frameMaxDeviation;
         }
 
         ctx.stroke();
       } else {
-        // Fallback: fake random bars
         const barCount = 80;
         const step = width / barCount;
 
@@ -328,8 +424,7 @@ export default function Home() {
           const maxBarHeight = height * 0.9;
           const minBarHeight = height * 0.2;
           const barHeight =
-            minBarHeight +
-            Math.random() * (maxBarHeight - minBarHeight);
+            minBarHeight + Math.random() * (maxBarHeight - minBarHeight);
 
           const yTop = height / 2 - barHeight / 2;
           const yBottom = height / 2 + barHeight / 2;
@@ -367,7 +462,6 @@ export default function Home() {
     ctx.fillRect(0, 0, width, height);
   }
 
-  // Start/stop animation when isRecording changes after canvas exists
   useEffect(() => {
     if (isRecording) {
       startWaveformAnimation();
@@ -380,7 +474,7 @@ export default function Home() {
     };
   }, [isRecording]);
 
-  // ----- Voice recording helpers -----
+  // Voice recording helpers
 
   async function startRecording() {
     if (isRecording) return;
@@ -394,11 +488,9 @@ export default function Home() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Reset loudness tracking at the start of each recording
       maxAmplitudeRef.current = 0;
       recordingStartTimeRef.current = Date.now();
 
-      // Set up Web Audio analyser for real-time waveform
       const AudioContextClass =
         window.AudioContext ||
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -408,14 +500,13 @@ export default function Home() {
         const audioContext = new AudioContextClass();
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 2048; // good resolution for waveform
+        analyser.fftSize = 2048;
 
         source.connect(analyser);
 
         audioContextRef.current = audioContext;
         analyserRef.current = analyser;
       } else {
-        console.warn("AudioContext not available; using fake waveform.");
         audioContextRef.current = null;
         analyserRef.current = null;
       }
@@ -430,17 +521,14 @@ export default function Home() {
       };
 
       mediaRecorder.onstop = () => {
-        // Stop all tracks so the mic is released
         stream.getTracks().forEach((track) => track.stop());
 
-        // Close audio context
         if (audioContextRef.current) {
           audioContextRef.current.close();
           audioContextRef.current = null;
         }
         analyserRef.current = null;
 
-        // Check how long the recording lasted
         const endTime = Date.now();
         const durationMs =
           recordingStartTimeRef.current != null
@@ -462,11 +550,14 @@ export default function Home() {
           ]);
         };
 
-        // If the recording was extremely short OR very quiet, treat as unusable
         const TOO_SHORT_MS = 800;
-        const TOO_QUIET_THRESHOLD = 0.08; // tweakable: 0 (silent) to ~1 (very loud)
+        const TOO_QUIET_THRESHOLD = 0.08;
 
-        if (!durationMs || durationMs < TOO_SHORT_MS || maxAmplitude < TOO_QUIET_THRESHOLD) {
+        if (
+          !durationMs ||
+          durationMs < TOO_SHORT_MS ||
+          maxAmplitude < TOO_QUIET_THRESHOLD
+        ) {
           showCouldNotUnderstand();
           return;
         }
@@ -475,13 +566,9 @@ export default function Home() {
           type: "audio/webm",
         });
 
-        console.log("Recorded audio Blob:", audioBlob);
-
-        // Send the audio to the backend for transcription
         (async () => {
           const transcript = await sendAudioForTranscription(audioBlob);
 
-          // If we got nothing useful back, show a gentle assistant message
           if (!transcript || !transcript.trim()) {
             showCouldNotUnderstand();
             return;
@@ -492,7 +579,6 @@ export default function Home() {
               ? `${prev.trim()} ${transcript}`
               : transcript
           );
-          // Mark this next message as audio-origin
           setInputMode("audio");
         })();
       };
@@ -501,7 +587,6 @@ export default function Home() {
       mediaRecorder.start();
       setIsRecording(true);
 
-      // Auto-stop after 180 seconds
       setTimeout(() => {
         if (
           mediaRecorderRef.current === mediaRecorder &&
@@ -523,7 +608,6 @@ export default function Home() {
       mediaRecorder.stop();
     }
 
-    // Close audio context when user manually stops
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
@@ -533,7 +617,7 @@ export default function Home() {
     setIsRecording(false);
   }
 
-  // ----- Send audio to backend for transcription -----
+  // Send audio to backend for transcription
 
   async function sendAudioForTranscription(
     audioBlob: Blob
@@ -554,7 +638,6 @@ export default function Home() {
         return null;
       }
 
-      console.log("Transcript:", data.transcript);
       return data.transcript || null;
     } catch (err) {
       console.error("Failed to send audio:", err);
@@ -562,7 +645,7 @@ export default function Home() {
     }
   }
 
-  // ----- UI Rendering -----
+  // UI Rendering
 
   const avatarBase: React.CSSProperties = {
     width: 28,
@@ -586,7 +669,6 @@ export default function Home() {
         fontFamily: "system-ui, Arial",
       }}
     >
-      {/* Pulsing animation for recording mic button */}
       <style>{`
         @keyframes pulseRecording {
           0% { transform: scale(1); opacity: 0.9; }
@@ -597,7 +679,6 @@ export default function Home() {
 
       <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Chat</h1>
 
-      {/* Interview status banner inside the iframe */}
       <p
         style={{
           fontStyle: "italic",
@@ -635,7 +716,6 @@ export default function Home() {
                 gap: 6,
               }}
             >
-              {/* Assistant avatar on the left */}
               {!isUser && (
                 <div
                   style={{
@@ -679,7 +759,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* User avatar on the right */}
               {isUser && (
                 <div
                   style={{
@@ -694,7 +773,6 @@ export default function Home() {
           );
         })}
 
-        {/* Typing indicator bubble for assistant */}
         {isLoading && (
           <div
             style={{
@@ -746,7 +824,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* Recording notice + waveform */}
       {isRecording && (
         <div style={{ marginTop: 12 }}>
           <p
