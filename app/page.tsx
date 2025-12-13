@@ -15,6 +15,7 @@ export default function Home() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
   // Transcript recording (Blob)
@@ -163,8 +164,7 @@ export default function Home() {
     const started = await ensureTranscriptStarted();
     if (!started.id) return;
 
-    const startedAt =
-      started.startedAt || new Date().toISOString();
+    const startedAt = started.startedAt || new Date().toISOString();
 
     const fullText = buildFinalTranscript({
       transcriptId: started.id,
@@ -265,7 +265,7 @@ export default function Home() {
 
   async function sendMessage() {
     const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
+    if (!trimmed || isLoading || isTranscribing) return;
 
     if (!chatStartTimeRef.current) {
       chatStartTimeRef.current = Date.now();
@@ -486,6 +486,7 @@ export default function Home() {
 
   async function startRecording() {
     if (isRecording) return;
+    if (isLoading || isTranscribing) return;
     if (typeof window === "undefined") return;
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -575,19 +576,24 @@ export default function Home() {
         });
 
         (async () => {
-          const transcript = await sendAudioForTranscription(audioBlob);
+          setIsTranscribing(true);
+          try {
+            const transcript = await sendAudioForTranscription(audioBlob);
 
-          if (!transcript || !transcript.trim()) {
-            showCouldNotUnderstand();
-            return;
+            if (!transcript || !transcript.trim()) {
+              showCouldNotUnderstand();
+              return;
+            }
+
+            setInput((prev) =>
+              prev && prev.trim().length > 0
+                ? `${prev.trim()} ${transcript}`
+                : transcript
+            );
+            setInputMode("audio");
+          } finally {
+            setIsTranscribing(false);
           }
-
-          setInput((prev) =>
-            prev && prev.trim().length > 0
-              ? `${prev.trim()} ${transcript}`
-              : transcript
-          );
-          setInputMode("audio");
         })();
       };
 
@@ -667,6 +673,10 @@ export default function Home() {
     color: "white",
     flexShrink: 0,
   };
+
+  const textareaPlaceholder = isTranscribing
+    ? "Transcribing audio…"
+    : "Type your message...";
 
   return (
     <main
@@ -865,7 +875,8 @@ export default function Home() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={(e) => e.preventDefault()}
-          placeholder="Type your message..."
+          placeholder={textareaPlaceholder}
+          readOnly={isTranscribing}
           style={{
             flex: 1,
             padding: 10,
@@ -877,11 +888,12 @@ export default function Home() {
             maxHeight: 200,
             resize: "none",
             overflowY: "auto",
+            background: isTranscribing ? "#f3f4f6" : "white",
           }}
         />
         <button
           type="button"
-          disabled={isLoading}
+          disabled={isLoading || isTranscribing}
           onClick={() => {
             if (isRecording) {
               stopRecording();
@@ -896,27 +908,30 @@ export default function Home() {
             background: isRecording ? "#b91c1c" : "#f9fafb",
             color: isRecording ? "white" : "inherit",
             fontSize: 18,
-            cursor: isLoading ? "default" : "pointer",
+            cursor: isLoading || isTranscribing ? "default" : "pointer",
             animation: isRecording
               ? "pulseRecording 1.2s ease-in-out infinite"
               : "none",
             transformOrigin: "center",
+            opacity: isLoading || isTranscribing ? 0.7 : 1,
           }}
         >
           {isRecording ? "⏹️" : "🎤"}
         </button>
         <button
           onClick={sendMessage}
-          disabled={isLoading || !input.trim()}
+          disabled={isLoading || isTranscribing || !input.trim()}
           style={{
             padding: "10px 14px",
             borderRadius: 6,
             border: "none",
-            background: isLoading || !input.trim() ? "#6b7280" : "#111827",
-            opacity: isLoading || !input.trim() ? 0.7 : 1,
+            background:
+              isLoading || isTranscribing || !input.trim() ? "#6b7280" : "#111827",
+            opacity: isLoading || isTranscribing || !input.trim() ? 0.7 : 1,
             color: "white",
             fontSize: 16,
-            cursor: isLoading || !input.trim() ? "default" : "pointer",
+            cursor:
+              isLoading || isTranscribing || !input.trim() ? "default" : "pointer",
           }}
         >
           {isLoading ? "Sending…" : "Send"}
