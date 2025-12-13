@@ -766,7 +766,7 @@ export default function Home() {
         }}
       >
         {messages.length === 0 && !isLoading && (
-          <p style={{ color: "#666" }}>Say hello to start the interview.</p>
+          <p style={{ color: "#666" }}>When you’re ready, you can start by saying hello.</p>
         )}
 
         {messages.map((m, i) => {
