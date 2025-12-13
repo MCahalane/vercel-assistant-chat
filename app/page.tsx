@@ -256,7 +256,7 @@ export default function Home() {
     setIsLoading(true);
 
     // Record user line immediately
-    void appendTranscriptLine({
+    await appendTranscriptLine({
       role: "user",
       text: trimmed,
       ts: new Date().toISOString(),
