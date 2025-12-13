@@ -693,6 +693,30 @@ export default function Home() {
           50% { transform: scale(1.06); opacity: 1; }
           100% { transform: scale(1); opacity: 0.9; }
         }
+
+        @keyframes typingDotBounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+          40% { transform: translateY(-3px); opacity: 1; }
+        }
+
+        .typingDots {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          height: 14px;
+        }
+
+        .typingDot {
+          width: 6px;
+          height: 6px;
+          border-radius: 9999px;
+          background: #6b7280;
+          opacity: 0.35;
+          animation: typingDotBounce 1.1s infinite ease-in-out;
+        }
+
+        .typingDot:nth-child(2) { animation-delay: 0.15s; }
+        .typingDot:nth-child(3) { animation-delay: 0.3s; }
       `}</style>
 
       <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Chat</h1>
@@ -835,7 +859,11 @@ export default function Home() {
                   color: "#6b7280",
                 }}
               >
-                …
+                <span className="typingDots" aria-label="Assistant is typing">
+                  <span className="typingDot" />
+                  <span className="typingDot" />
+                  <span className="typingDot" />
+                </span>
               </div>
             </div>
           </div>
