@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       `\n`;
 
     const result = await put(path, initialText, {
-      access: "private",
+      access: "public",
       contentType: "text/plain; charset=utf-8",
       addRandomSuffix: false,
       allowOverwrite: false,

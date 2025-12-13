@@ -46,7 +46,7 @@ async function writeTranscriptMessage(args: {
     `\n`;
 
   await put(path, content, {
-    access: "private",
+    access: "public",
     contentType: "text/plain; charset=utf-8",
     addRandomSuffix: false,
     allowOverwrite: false,
