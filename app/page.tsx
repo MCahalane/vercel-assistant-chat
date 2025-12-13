@@ -809,7 +809,7 @@ export default function Home() {
                       marginBottom: 2,
                     }}
                   >
-                    {isUser ? "You" : "Assistant"}
+                    {isUser ? "You" : "AI Assistant"}
                   </span>
                   <div
                     style={{
@@ -880,7 +880,7 @@ export default function Home() {
                   marginBottom: 2,
                 }}
               >
-                Assistant
+                AI Assistant
               </span>
               <div
                 style={{
