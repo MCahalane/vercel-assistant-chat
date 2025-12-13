@@ -23,6 +23,9 @@ export default function Home() {
   const transcriptReadyRef = useRef(false);
   const transcriptStartAttemptedRef = useRef(false);
 
+  // IMPORTANT: queue to prevent overlapping append writes (prevents lost lines)
+  const transcriptAppendQueueRef = useRef<Promise<void>>(Promise.resolve());
+
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -143,7 +146,7 @@ export default function Home() {
     if (!id) return;
 
     try {
-      await fetch("/api/transcript/append", {
+      const res = await fetch("/api/transcript/append", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -153,9 +156,31 @@ export default function Home() {
           ts: args.ts,
         }),
       });
+
+      // If the endpoint errors, do nothing in UI, but we also do not want silent queue failure.
+      // We still let the queue continue.
+      if (!res.ok) {
+        // Intentionally silent to avoid interrupting participants.
+        // You can temporarily add console.log here during debugging if you want.
+      }
     } catch {
       // Intentionally silent. We do not want to interrupt the chat UI.
     }
+  }
+
+  // Queue helper to force transcript writes to happen one at a time
+  function queueTranscriptLine(args: {
+    role: "user" | "assistant";
+    text: string;
+    ts: string;
+  }) {
+    transcriptAppendQueueRef.current = transcriptAppendQueueRef.current
+      .then(() => appendTranscriptLine(args))
+      .catch(() => {
+        // Keep queue alive even if a prior append throws unexpectedly
+      });
+
+    return transcriptAppendQueueRef.current;
   }
 
   // Start transcript as early as possible
@@ -255,8 +280,8 @@ export default function Home() {
     setInput("");
     setIsLoading(true);
 
-    // Record user line immediately
-    await appendTranscriptLine({
+    // Record user line immediately (queued, so no overlap)
+    await queueTranscriptLine({
       role: "user",
       text: trimmed,
       ts: new Date().toISOString(),
@@ -292,7 +317,8 @@ export default function Home() {
           { role: "assistant", text: errText },
         ]);
 
-        void appendTranscriptLine({
+        // Record assistant error line (queued)
+        await queueTranscriptLine({
           role: "assistant",
           text: errText,
           ts: new Date().toISOString(),
@@ -310,8 +336,8 @@ export default function Home() {
 
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // Record assistant line immediately
-      void appendTranscriptLine({
+      // Record assistant line (queued)
+      await queueTranscriptLine({
         role: "assistant",
         text: assistantText,
         ts: new Date().toISOString(),
@@ -346,7 +372,8 @@ export default function Home() {
         },
       ]);
 
-      void appendTranscriptLine({
+      // Record assistant error line (queued)
+      await queueTranscriptLine({
         role: "assistant",
         text: msg,
         ts: new Date().toISOString(),
