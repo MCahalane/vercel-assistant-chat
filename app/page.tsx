@@ -20,10 +20,6 @@ export default function Home() {
   // Transcript recording (Blob)
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
   const transcriptIdRef = useRef<string | null>(null);
-  const transcriptReadyRef = useRef(false);
-  const transcriptStartAttemptedRef = useRef(false);
-
-  // Prevent multiple final transcript saves
   const transcriptFinalizedRef = useRef(false);
 
   // Audio recording
@@ -86,16 +82,47 @@ export default function Home() {
 
   // Transcript helpers (save once at end)
 
-  async function ensureTranscriptStarted(): Promise<string | null> {
-    if (transcriptIdRef.current) {
-      transcriptReadyRef.current = true;
-      return transcriptIdRef.current;
+  function cleanBlock(s: string) {
+    return (s || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .trim();
+  }
+
+  function buildFinalTranscript(args: {
+    transcriptId: string;
+    startedAt: string;
+    threadId: string | null;
+    allMsgs: ChatMsg[];
+  }) {
+    const headerLines: string[] = [];
+    headerLines.push("Chat transcript");
+    headerLines.push(`TranscriptId: ${args.transcriptId}`);
+    headerLines.push(`StartedAt: ${args.startedAt}`);
+    if (args.threadId) headerLines.push(`ThreadId: ${args.threadId}`);
+    headerLines.push("");
+
+    const bodyLines: string[] = [];
+
+    for (const m of args.allMsgs) {
+      const roleLabel = m.role === "user" ? "User" : "Assistant";
+      const text = cleanBlock(m.text);
+      if (!text) continue;
+
+      bodyLines.push(`${roleLabel}: ${text}`);
+      bodyLines.push("");
     }
 
-    if (transcriptReadyRef.current) return transcriptIdRef.current;
-    if (transcriptStartAttemptedRef.current) return transcriptIdRef.current;
+    return headerLines.join("\n") + "\n" + bodyLines.join("\n");
+  }
 
-    transcriptStartAttemptedRef.current = true;
+  async function ensureTranscriptStarted(): Promise<{
+    id: string | null;
+    startedAt: string | null;
+  }> {
+    if (transcriptIdRef.current) {
+      return { id: transcriptIdRef.current, startedAt: null };
+    }
 
     try {
       const res = await fetch("/api/transcript/start", {
@@ -103,76 +130,61 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           startedAt: new Date().toISOString(),
+          threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
         }),
       });
 
       const data = await res.json();
 
-      if (!res.ok) {
-        transcriptStartAttemptedRef.current = false;
-        return null;
-      }
+      if (!res.ok) return { id: null, startedAt: null };
 
       if (data && typeof data.transcriptId === "string" && data.transcriptId) {
         transcriptIdRef.current = data.transcriptId;
         setTranscriptId(data.transcriptId);
-        transcriptReadyRef.current = true;
-        return data.transcriptId;
+        return {
+          id: data.transcriptId,
+          startedAt: typeof data.startedAt === "string" ? data.startedAt : null,
+        };
       }
 
-      transcriptStartAttemptedRef.current = false;
-      return null;
+      return { id: null, startedAt: null };
     } catch {
-      transcriptStartAttemptedRef.current = false;
-      return null;
+      return { id: null, startedAt: null };
     }
   }
 
-  async function appendTranscriptLine(args: {
-    role: "user" | "assistant";
-    text: string;
-    ts: string;
+  async function finalizeTranscriptOnce(args: {
+    finalMessagesSnapshot: ChatMsg[];
+    finalThreadId: string | null;
   }) {
-    const cleanText = (args.text || "").trim();
-    if (!cleanText) return;
-
-    const id = transcriptIdRef.current;
-    if (!id) return;
-
-    try {
-      const res = await fetch("/api/transcript/append", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcriptId: id,
-          role: args.role,
-          text: cleanText,
-          ts: args.ts,
-        }),
-      });
-
-      if (!res.ok) {
-        // Intentionally silent to avoid interrupting participants.
-      }
-    } catch {
-      // Intentionally silent to avoid interrupting participants.
-    }
-  }
-
-  async function saveTranscriptOnceAtEnd(allMsgs: ChatMsg[]) {
     if (transcriptFinalizedRef.current) return;
     transcriptFinalizedRef.current = true;
 
-    const id = await ensureTranscriptStarted();
-    if (!id) return;
+    const started = await ensureTranscriptStarted();
+    if (!started.id) return;
 
-    // Append every message in order, one by one
-    for (const m of allMsgs) {
-      await appendTranscriptLine({
-        role: m.role,
-        text: m.text,
-        ts: new Date().toISOString(),
+    const startedAt =
+      started.startedAt || new Date().toISOString();
+
+    const fullText = buildFinalTranscript({
+      transcriptId: started.id,
+      startedAt,
+      threadId: args.finalThreadId,
+      allMsgs: args.finalMessagesSnapshot,
+    });
+
+    try {
+      await fetch("/api/transcript/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcriptId: started.id,
+          mode: "finalize",
+          fullText,
+        }),
       });
+    } catch {
+      // Silent: do not interrupt participants
     }
   }
 
@@ -206,22 +218,18 @@ export default function Home() {
     }
   }
 
-  function checkForInterviewEnd(
-    assistantText: string,
-    summaryArgs: {
-      threadId: string | null;
-      messageCount: number;
-      userMessageCount: number;
-      finalMessagesSnapshot: ChatMsg[];
-    }
-  ) {
-    if (chatCompletedRef.current) {
-      return;
-    }
+  function checkForInterviewEnd(args: {
+    assistantText: string;
+    finalThreadId: string | null;
+    messageCount: number;
+    userMessageCount: number;
+    finalMessagesSnapshot: ChatMsg[];
+  }) {
+    if (chatCompletedRef.current) return;
 
     if (
-      typeof assistantText === "string" &&
-      assistantText.includes("END_INTERVIEW")
+      typeof args.assistantText === "string" &&
+      args.assistantText.includes("END_INTERVIEW")
     ) {
       chatCompletedRef.current = true;
 
@@ -239,15 +247,17 @@ export default function Home() {
       );
 
       sendChatCompletionSummary({
-        threadId: summaryArgs.threadId,
-        messageCount: summaryArgs.messageCount,
-        userMessageCount: summaryArgs.userMessageCount,
+        threadId: args.finalThreadId,
+        messageCount: args.messageCount,
+        userMessageCount: args.userMessageCount,
         durationSeconds,
         finishedReason: "END_INTERVIEW",
       });
 
-      // Save transcript once, at the end, using the full ordered message list
-      void saveTranscriptOnceAtEnd(summaryArgs.finalMessagesSnapshot);
+      void finalizeTranscriptOnce({
+        finalMessagesSnapshot: args.finalMessagesSnapshot,
+        finalThreadId: args.finalThreadId,
+      });
     }
   }
 
@@ -309,10 +319,7 @@ export default function Home() {
       }
 
       const assistantText: string = data.reply || "No reply received.";
-      const assistantMsg: ChatMsg = {
-        role: "assistant",
-        text: assistantText,
-      };
+      const assistantMsg: ChatMsg = { role: "assistant", text: assistantText };
 
       const nextMessagesAfterAssistant = [
         ...nextMessagesAfterUser,
@@ -333,15 +340,15 @@ export default function Home() {
 
       const totalMessagesAfter = currentMessages.length + 2;
 
-      checkForInterviewEnd(assistantText, {
-        threadId: finalThreadId || null,
+      checkForInterviewEnd({
+        assistantText,
+        finalThreadId: finalThreadId || null,
         messageCount: totalMessagesAfter,
         userMessageCount: newUserMessageCount,
         finalMessagesSnapshot: nextMessagesAfterAssistant,
       });
     } catch (e: any) {
       const msg = e?.message || "Network error.";
-
       const assistantErrMsg: ChatMsg = { role: "assistant", text: msg };
       setMessages((prev) => [...prev, assistantErrMsg]);
     } finally {

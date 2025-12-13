@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 
 type Role = "user" | "assistant";
 
-function cleanLine(s: string) {
+function cleanTextBlock(s: string) {
   return (s || "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
@@ -19,7 +19,6 @@ function normaliseRole(raw: unknown): Role | null {
   if (v === "user") return "user";
   if (v === "assistant") return "assistant";
 
-  // Friendly aliases we’ve seen in UIs
   if (v === "you") return "user";
   if (v === "ai") return "assistant";
   if (v === "bot") return "assistant";
@@ -28,9 +27,15 @@ function normaliseRole(raw: unknown): Role | null {
 }
 
 function formatLine(args: { ts: string; role: Role; text: string }) {
-  const safeText = cleanLine(args.text);
+  const safeText = cleanTextBlock(args.text);
   if (!safeText) return "";
   return `[${args.ts}] ${args.role}: ${safeText}\n`;
+}
+
+async function readExistingText(url: string): Promise<string> {
+  const r = await fetch(url, { cache: "no-store" as RequestCache });
+  if (!r.ok) return "";
+  return await r.text();
 }
 
 export async function POST(req: Request) {
@@ -38,7 +43,6 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const transcriptId = body?.transcriptId;
-
     if (!transcriptId || typeof transcriptId !== "string") {
       return NextResponse.json(
         { ok: false, error: "Missing transcriptId" },
@@ -48,22 +52,53 @@ export async function POST(req: Request) {
 
     const path = `chat-transcripts/${transcriptId}.txt`;
 
-    // Support both payload styles:
+    const mode =
+      typeof body?.mode === "string" ? body.mode.trim().toLowerCase() : "append";
+
+    // Mode: finalize (recommended)
+    // Payload: { transcriptId, mode: "finalize", fullText: string }
+    if (mode === "finalize") {
+      const fullText = body?.fullText;
+
+      if (!fullText || typeof fullText !== "string") {
+        return NextResponse.json(
+          { ok: false, error: "Missing fullText for finalize" },
+          { status: 400 }
+        );
+      }
+
+      const safe = cleanTextBlock(fullText);
+      if (!safe) {
+        return NextResponse.json({ ok: true, skipped: true });
+      }
+
+      const finalText = safe.endsWith("\n") ? safe : safe + "\n";
+
+      await put(path, finalText, {
+        access: "public",
+        contentType: "text/plain; charset=utf-8",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+
+      return NextResponse.json({ ok: true, mode: "finalize" });
+    }
+
+    // Mode: append (legacy, best-effort)
+    // Support payload styles:
     // 1) { transcriptId, role, text, ts }
-    // 2) { transcriptId, line }
+    // 2) { transcriptId, line, ts? }
     const ts = typeof body?.ts === "string" ? body.ts : new Date().toISOString();
 
     let newLine = "";
 
-    // Style (2): raw pre-formatted line
     if (typeof body?.line === "string" && body.line.trim()) {
-      const safe = cleanLine(body.line);
+      const safe = cleanTextBlock(body.line);
       if (!safe) {
         return NextResponse.json({ ok: true, skipped: true });
       }
       newLine = safe.endsWith("\n") ? safe : safe + "\n";
     } else {
-      // Style (1): role + text
       const role = normaliseRole(body?.role);
       const text = body?.text;
 
@@ -92,7 +127,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // Find the existing blob (created in /start) so we can append
+    // Read the current blob, append, and write back.
+    // This is not atomic, so we keep it only for backwards compatibility.
     const existing = await list({ prefix: path, limit: 5 });
     const match = existing.blobs.find((b) => b.pathname === path);
 
@@ -100,15 +136,13 @@ export async function POST(req: Request) {
 
     if (match?.url) {
       try {
-        const r = await fetch(match.url);
-        if (r.ok) {
-          currentText = await r.text();
-        }
+        currentText = await readExistingText(match.url);
       } catch {
-        // If fetch fails, we still write just the new line
+        currentText = "";
       }
-    } else {
-      // If missing for any reason, create a minimal header
+    }
+
+    if (!currentText) {
       currentText =
         `Chat transcript started\n` +
         `TranscriptId: ${transcriptId}\n` +
@@ -124,10 +158,10 @@ export async function POST(req: Request) {
       allowOverwrite: true,
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, mode: "append" });
   } catch (err: any) {
     return NextResponse.json(
-      { ok: false, error: err?.message || "Failed to append transcript line" },
+      { ok: false, error: err?.message || "Failed to write transcript" },
       { status: 500 }
     );
   }
