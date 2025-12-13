@@ -50,6 +50,9 @@ export default function Home() {
   // Textarea ref for auto expanding input
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Track transcribing transitions for autofocus
+  const wasTranscribingRef = useRef(false);
+
   // Auto scroll to latest message when messages or loading state change
   useEffect(() => {
     const container = chatContainerRef.current;
@@ -80,6 +83,26 @@ export default function Home() {
     const newHeight = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${newHeight}px`;
   }, [input]);
+
+  // After voice transcription completes, return focus to textarea and place cursor at end
+  useEffect(() => {
+    const wasTranscribing = wasTranscribingRef.current;
+
+    if (wasTranscribing && !isTranscribing) {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        try {
+          el.setSelectionRange(len, len);
+        } catch {
+          // Ignore selection errors in older browsers
+        }
+      }
+    }
+
+    wasTranscribingRef.current = isTranscribing;
+  }, [isTranscribing]);
 
   // Transcript helpers (save once at end)
 
@@ -748,70 +771,81 @@ export default function Home() {
 
         {messages.map((m, i) => {
           const isUser = m.role === "user";
-          return (
-            <div
-              key={i}
-              style={{
-                display: "flex",
-                justifyContent: isUser ? "flex-end" : "flex-start",
-                marginBottom: 10,
-                gap: 6,
-              }}
-            >
-              {!isUser && (
-                <div
-                  style={{
-                    ...avatarBase,
-                    background: "#111827",
-                  }}
-                >
-                  A
-                </div>
-              )}
+          const turnGap = isUser ? 10 : 14;
 
+          return (
+            <React.Fragment key={i}>
               <div
                 style={{
                   display: "flex",
-                  flexDirection: "column",
-                  alignItems: isUser ? "flex-end" : "flex-start",
-                  maxWidth: "80%",
+                  justifyContent: isUser ? "flex-end" : "flex-start",
+                  marginBottom: turnGap,
+                  gap: 6,
                 }}
               >
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: "#6b7280",
-                    marginBottom: 2,
-                  }}
-                >
-                  {isUser ? "You" : "Assistant"}
-                </span>
+                {!isUser && (
+                  <div
+                    style={{
+                      ...avatarBase,
+                      background: "#111827",
+                    }}
+                  >
+                    A
+                  </div>
+                )}
+
                 <div
                   style={{
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    background: isUser ? "#dbeafe" : "#ffffff",
-                    border: "1px solid #ddd",
-                    whiteSpace: "pre-wrap",
-                    fontSize: 14,
-                    lineHeight: 1.4,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: isUser ? "flex-end" : "flex-start",
+                    maxWidth: "80%",
                   }}
                 >
-                  {m.text}
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#6b7280",
+                      marginBottom: 2,
+                    }}
+                  >
+                    {isUser ? "You" : "Assistant"}
+                  </span>
+                  <div
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      background: isUser ? "#dbeafe" : "#ffffff",
+                      border: "1px solid #ddd",
+                      whiteSpace: "pre-wrap",
+                      fontSize: 14,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {m.text}
+                  </div>
                 </div>
+
+                {isUser && (
+                  <div
+                    style={{
+                      ...avatarBase,
+                      background: "#2563eb",
+                    }}
+                  >
+                    Y
+                  </div>
+                )}
               </div>
 
-              {isUser && (
+              {!isUser && (
                 <div
                   style={{
-                    ...avatarBase,
-                    background: "#2563eb",
+                    height: 6,
                   }}
-                >
-                  Y
-                </div>
+                />
               )}
-            </div>
+            </React.Fragment>
           );
         })}
 
@@ -865,6 +899,8 @@ export default function Home() {
                   <span className="typingDot" />
                 </span>
               </div>
+
+              <div style={{ height: 6 }} />
             </div>
           </div>
         )}
