@@ -926,12 +926,16 @@ export default function Home() {
             borderRadius: 6,
             border: "none",
             background:
-              isLoading || isTranscribing || !input.trim() ? "#6b7280" : "#111827",
+              isLoading || isTranscribing || !input.trim()
+                ? "#6b7280"
+                : "#111827",
             opacity: isLoading || isTranscribing || !input.trim() ? 0.7 : 1,
             color: "white",
             fontSize: 16,
             cursor:
-              isLoading || isTranscribing || !input.trim() ? "default" : "pointer",
+              isLoading || isTranscribing || !input.trim()
+                ? "default"
+                : "pointer",
           }}
         >
           {isLoading ? "Sending…" : "Send"}
