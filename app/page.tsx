@@ -23,8 +23,8 @@ export default function Home() {
   const transcriptReadyRef = useRef(false);
   const transcriptStartAttemptedRef = useRef(false);
 
-  // IMPORTANT: queue to prevent overlapping append writes (prevents lost lines)
-  const transcriptAppendQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Prevent multiple final transcript saves
+  const transcriptFinalizedRef = useRef(false);
 
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -84,10 +84,9 @@ export default function Home() {
     el.style.height = `${newHeight}px`;
   }, [input]);
 
-  // Transcript helpers (continuous recording)
+  // Transcript helpers (save once at end)
 
   async function ensureTranscriptStarted(): Promise<string | null> {
-    // If we already have an id in the ref, we are done
     if (transcriptIdRef.current) {
       transcriptReadyRef.current = true;
       return transcriptIdRef.current;
@@ -137,12 +136,7 @@ export default function Home() {
     const cleanText = (args.text || "").trim();
     if (!cleanText) return;
 
-    let id = transcriptIdRef.current;
-
-    if (!id) {
-      id = await ensureTranscriptStarted();
-    }
-
+    const id = transcriptIdRef.current;
     if (!id) return;
 
     try {
@@ -157,36 +151,30 @@ export default function Home() {
         }),
       });
 
-      // If the endpoint errors, do nothing in UI, but we also do not want silent queue failure.
-      // We still let the queue continue.
       if (!res.ok) {
         // Intentionally silent to avoid interrupting participants.
-        // You can temporarily add console.log here during debugging if you want.
       }
     } catch {
-      // Intentionally silent. We do not want to interrupt the chat UI.
+      // Intentionally silent to avoid interrupting participants.
     }
   }
 
-  // Queue helper to force transcript writes to happen one at a time
-  function queueTranscriptLine(args: {
-    role: "user" | "assistant";
-    text: string;
-    ts: string;
-  }) {
-    transcriptAppendQueueRef.current = transcriptAppendQueueRef.current
-      .then(() => appendTranscriptLine(args))
-      .catch(() => {
-        // Keep queue alive even if a prior append throws unexpectedly
+  async function saveTranscriptOnceAtEnd(allMsgs: ChatMsg[]) {
+    if (transcriptFinalizedRef.current) return;
+    transcriptFinalizedRef.current = true;
+
+    const id = await ensureTranscriptStarted();
+    if (!id) return;
+
+    // Append every message in order, one by one
+    for (const m of allMsgs) {
+      await appendTranscriptLine({
+        role: m.role,
+        text: m.text,
+        ts: new Date().toISOString(),
       });
-
-    return transcriptAppendQueueRef.current;
+    }
   }
-
-  // Start transcript as early as possible
-  useEffect(() => {
-    void ensureTranscriptStarted();
-  }, []);
 
   // Qualtrics summary helpers
 
@@ -224,6 +212,7 @@ export default function Home() {
       threadId: string | null;
       messageCount: number;
       userMessageCount: number;
+      finalMessagesSnapshot: ChatMsg[];
     }
   ) {
     if (chatCompletedRef.current) {
@@ -256,6 +245,9 @@ export default function Home() {
         durationSeconds,
         finishedReason: "END_INTERVIEW",
       });
+
+      // Save transcript once, at the end, using the full ordered message list
+      void saveTranscriptOnceAtEnd(summaryArgs.finalMessagesSnapshot);
     }
   }
 
@@ -276,16 +268,11 @@ export default function Home() {
     const newUserMessageCount = existingUserCount + 1;
 
     const userMsg: ChatMsg = { role: "user", text: trimmed };
-    setMessages((prev) => [...prev, userMsg]);
+    const nextMessagesAfterUser = [...currentMessages, userMsg];
+
+    setMessages(nextMessagesAfterUser);
     setInput("");
     setIsLoading(true);
-
-    // Record user line immediately (queued, so no overlap)
-    await queueTranscriptLine({
-      role: "user",
-      text: trimmed,
-      ts: new Date().toISOString(),
-    });
 
     try {
       const payload: {
@@ -312,17 +299,10 @@ export default function Home() {
       if (!res.ok) {
         const errText =
           data?.error || "Something went wrong calling the server.";
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: errText },
-        ]);
+        const assistantErrMsg: ChatMsg = { role: "assistant", text: errText };
 
-        // Record assistant error line (queued)
-        await queueTranscriptLine({
-          role: "assistant",
-          text: errText,
-          ts: new Date().toISOString(),
-        });
+        const nextMessagesAfterErr = [...nextMessagesAfterUser, assistantErrMsg];
+        setMessages(nextMessagesAfterErr);
 
         setIsLoading(false);
         return;
@@ -334,14 +314,11 @@ export default function Home() {
         text: assistantText,
       };
 
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      // Record assistant line (queued)
-      await queueTranscriptLine({
-        role: "assistant",
-        text: assistantText,
-        ts: new Date().toISOString(),
-      });
+      const nextMessagesAfterAssistant = [
+        ...nextMessagesAfterUser,
+        assistantMsg,
+      ];
+      setMessages(nextMessagesAfterAssistant);
 
       setInputMode("text");
 
@@ -360,24 +337,13 @@ export default function Home() {
         threadId: finalThreadId || null,
         messageCount: totalMessagesAfter,
         userMessageCount: newUserMessageCount,
+        finalMessagesSnapshot: nextMessagesAfterAssistant,
       });
     } catch (e: any) {
       const msg = e?.message || "Network error.";
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: msg,
-        },
-      ]);
-
-      // Record assistant error line (queued)
-      await queueTranscriptLine({
-        role: "assistant",
-        text: msg,
-        ts: new Date().toISOString(),
-      });
+      const assistantErrMsg: ChatMsg = { role: "assistant", text: msg };
+      setMessages((prev) => [...prev, assistantErrMsg]);
     } finally {
       setIsLoading(false);
     }
