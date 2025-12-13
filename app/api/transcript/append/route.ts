@@ -12,6 +12,21 @@ function cleanLine(s: string) {
     .trim();
 }
 
+function normaliseRole(raw: unknown): Role | null {
+  if (typeof raw !== "string") return null;
+  const v = raw.trim().toLowerCase();
+
+  if (v === "user") return "user";
+  if (v === "assistant") return "assistant";
+
+  // Friendly aliases we’ve seen in UIs
+  if (v === "you") return "user";
+  if (v === "ai") return "assistant";
+  if (v === "bot") return "assistant";
+
+  return null;
+}
+
 function formatLine(args: { ts: string; role: Role; text: string }) {
   const safeText = cleanLine(args.text);
   if (!safeText) return "";
@@ -23,9 +38,6 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const transcriptId = body?.transcriptId;
-    const role = body?.role as Role;
-    const text = body?.text;
-    const ts = body?.ts || new Date().toISOString();
 
     if (!transcriptId || typeof transcriptId !== "string") {
       return NextResponse.json(
@@ -34,29 +46,53 @@ export async function POST(req: Request) {
       );
     }
 
-    if (role !== "user" && role !== "assistant") {
-      return NextResponse.json(
-        { ok: false, error: "Invalid role" },
-        { status: 400 }
-      );
-    }
-
-    if (!text || typeof text !== "string") {
-      return NextResponse.json(
-        { ok: false, error: "Missing text" },
-        { status: 400 }
-      );
-    }
-
     const path = `chat-transcripts/${transcriptId}.txt`;
-    const newLine = formatLine({ ts, role, text });
 
-    if (!newLine) {
-      return NextResponse.json({ ok: true, skipped: true });
+    // Support both payload styles:
+    // 1) { transcriptId, role, text, ts }
+    // 2) { transcriptId, line }
+    const ts = typeof body?.ts === "string" ? body.ts : new Date().toISOString();
+
+    let newLine = "";
+
+    // Style (2): raw pre-formatted line
+    if (typeof body?.line === "string" && body.line.trim()) {
+      const safe = cleanLine(body.line);
+      if (!safe) {
+        return NextResponse.json({ ok: true, skipped: true });
+      }
+      newLine = safe.endsWith("\n") ? safe : safe + "\n";
+    } else {
+      // Style (1): role + text
+      const role = normaliseRole(body?.role);
+      const text = body?.text;
+
+      if (!role) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Invalid role",
+            receivedRole: body?.role ?? null,
+            hint: 'Expected role "user" or "assistant" (or "You"/"AI" aliases).',
+          },
+          { status: 400 }
+        );
+      }
+
+      if (!text || typeof text !== "string") {
+        return NextResponse.json(
+          { ok: false, error: "Missing text" },
+          { status: 400 }
+        );
+      }
+
+      newLine = formatLine({ ts, role, text });
+      if (!newLine) {
+        return NextResponse.json({ ok: true, skipped: true });
+      }
     }
 
-    // Find the existing blob (we created it in /start).
-    // If it exists, fetch its current contents so we can append a new line.
+    // Find the existing blob (created in /start) so we can append
     const existing = await list({ prefix: path, limit: 5 });
     const match = existing.blobs.find((b) => b.pathname === path);
 
@@ -69,10 +105,10 @@ export async function POST(req: Request) {
           currentText = await r.text();
         }
       } catch {
-        // If fetch fails, we will still try to write a file with just the new line.
+        // If fetch fails, we still write just the new line
       }
     } else {
-      // If the file is missing for any reason, create a basic header now.
+      // If missing for any reason, create a minimal header
       currentText =
         `Chat transcript started\n` +
         `TranscriptId: ${transcriptId}\n` +
