@@ -26,6 +26,10 @@ export default function Home() {
   // Keep a stable startedAt for the transcript once created
   const transcriptStartedAtRef = useRef<string | null>(null);
 
+  // True interview timing (separate from file write time)
+  const interviewStartedAtIsoRef = useRef<string | null>(null);
+  const interviewEndedAtIsoRef = useRef<string | null>(null);
+
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -141,7 +145,9 @@ export default function Home() {
     return headerLines.join("\n") + "\n" + bodyLines.join("\n");
   }
 
-  async function ensureTranscriptStarted(): Promise<{
+  async function ensureTranscriptStarted(
+    preferredStartedAtIso?: string | null
+  ): Promise<{
     id: string | null;
     startedAt: string | null;
   }> {
@@ -153,13 +159,16 @@ export default function Home() {
     }
 
     try {
-      const nowIso = new Date().toISOString();
+      const startedAtIso =
+        (preferredStartedAtIso && preferredStartedAtIso.trim()) ||
+        transcriptStartedAtRef.current ||
+        new Date().toISOString();
 
       const res = await fetch("/api/transcript/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startedAt: nowIso,
+          startedAt: startedAtIso,
           threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
         }),
       });
@@ -175,7 +184,7 @@ export default function Home() {
         const startedAt =
           typeof data.startedAt === "string" && data.startedAt
             ? data.startedAt
-            : nowIso;
+            : startedAtIso;
 
         transcriptStartedAtRef.current = startedAt;
 
@@ -197,15 +206,22 @@ export default function Home() {
     if (transcriptFinalizedRef.current) return;
     transcriptFinalizedRef.current = true;
 
-    const started = await ensureTranscriptStarted();
+    const started = await ensureTranscriptStarted(interviewStartedAtIsoRef.current);
     if (!started.id) return;
 
-    const startedAt = started.startedAt || new Date().toISOString();
-    const endedAt = new Date().toISOString();
+    const interviewStartedAt =
+      interviewStartedAtIsoRef.current ||
+      started.startedAt ||
+      new Date().toISOString();
+
+    const interviewEndedAt =
+      interviewEndedAtIsoRef.current || new Date().toISOString();
+
+    const transcriptWrittenAt = new Date().toISOString();
 
     const fullText = buildFinalTranscript({
       transcriptId: started.id,
-      startedAt,
+      startedAt: interviewStartedAt,
       threadId: args.finalThreadId,
       allMsgs: args.finalMessagesSnapshot,
     });
@@ -220,14 +236,22 @@ export default function Home() {
 
     const metadata = {
       threadId: args.finalThreadId,
-      startedAt,
-      endedAt,
+
+      interviewStartedAt,
+      interviewEndedAt,
       durationSeconds: args.durationSeconds,
+
+      transcriptWrittenAt,
+
       finishedReason: args.finishedReason,
       messageCount,
       userMessageCount,
       assistantMessageCount,
-      completionTimestamp: endedAt,
+
+      // Legacy compatibility fields (so older downstream parsing does not break)
+      startedAt: interviewStartedAt,
+      endedAt: interviewEndedAt,
+      completionTimestamp: transcriptWrittenAt,
     };
 
     try {
@@ -291,6 +315,8 @@ export default function Home() {
     ) {
       chatCompletedRef.current = true;
 
+      interviewEndedAtIsoRef.current = new Date().toISOString();
+
       const endTime = Date.now();
       let durationSeconds: number | null = null;
 
@@ -329,6 +355,14 @@ export default function Home() {
 
     if (!chatStartTimeRef.current) {
       chatStartTimeRef.current = Date.now();
+    }
+
+    if (!interviewStartedAtIsoRef.current) {
+      interviewStartedAtIsoRef.current = new Date().toISOString();
+      transcriptStartedAtRef.current = interviewStartedAtIsoRef.current;
+
+      // Start transcript early so "startedAt" reflects the true start of the chat
+      void ensureTranscriptStarted(interviewStartedAtIsoRef.current);
     }
 
     const currentMessages = messages;
@@ -692,7 +726,9 @@ export default function Home() {
 
   // Send audio to backend for transcription
 
-  async function sendAudioForTranscription(audioBlob: Blob): Promise<string | null> {
+  async function sendAudioForTranscription(
+    audioBlob: Blob
+  ): Promise<string | null> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");

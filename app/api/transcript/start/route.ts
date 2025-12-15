@@ -17,9 +17,21 @@ function safeLine(value: unknown) {
   return trimmed.replace(/[\r\n]+/g, " ");
 }
 
+function safeIsoDate(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const ms = Date.parse(trimmed);
+  if (Number.isNaN(ms)) return null;
+
+  // Normalise to ISO to keep it consistent
+  return new Date(ms).toISOString();
+}
+
 export async function POST(req: Request) {
   try {
-    // Optional JSON body, so later we can pass things like prolificId / threadId
+    // Optional JSON body, so later we can pass things like prolificId / threadId / startedAt
     let body: any = null;
     try {
       body = await req.json();
@@ -28,7 +40,9 @@ export async function POST(req: Request) {
     }
 
     const transcriptId = makeTranscriptId();
-    const startedAt = new Date().toISOString();
+
+    // If client provides a real start time, respect it.
+    const startedAt = safeIsoDate(body?.startedAt) || new Date().toISOString();
 
     const prolificId = safeLine(body?.prolificId);
     const threadId = safeLine(body?.threadId);
