@@ -308,43 +308,54 @@ export default function Home() {
     finalMessagesSnapshot: ChatMsg[];
   }) {
     if (chatCompletedRef.current) return;
+    if (typeof args.assistantText !== "string") return;
 
-    if (
-      typeof args.assistantText === "string" &&
-      args.assistantText.includes("END_INTERVIEW")
-    ) {
-      chatCompletedRef.current = true;
+    let finishedReason: "END_INTERVIEW" | "INTERVIEW_FAILED" | null = null;
 
-      interviewEndedAtIsoRef.current = new Date().toISOString();
+    // IMPORTANT: Check INTERVIEW_FAILED first, in case the assistant text includes both strings for any reason
+    if (args.assistantText.includes("INTERVIEW_FAILED")) {
+      finishedReason = "INTERVIEW_FAILED";
+    } else if (args.assistantText.includes("END_INTERVIEW")) {
+      finishedReason = "END_INTERVIEW";
+    }
 
-      const endTime = Date.now();
-      let durationSeconds: number | null = null;
+    if (!finishedReason) return;
 
-      if (chatStartTimeRef.current) {
-        durationSeconds = Math.round(
-          (endTime - chatStartTimeRef.current) / 1000
-        );
-      }
+    chatCompletedRef.current = true;
 
+    interviewEndedAtIsoRef.current = new Date().toISOString();
+
+    const endTime = Date.now();
+    let durationSeconds: number | null = null;
+
+    if (chatStartTimeRef.current) {
+      durationSeconds = Math.round((endTime - chatStartTimeRef.current) / 1000);
+    }
+
+    if (finishedReason === "INTERVIEW_FAILED") {
+      setInterviewStatus(
+        "This chat has ended. You may return to the survey and press Next."
+      );
+    } else {
       setInterviewStatus(
         "Chat complete. You may return to the survey and press Next."
       );
-
-      sendChatCompletionSummary({
-        threadId: args.finalThreadId,
-        messageCount: args.messageCount,
-        userMessageCount: args.userMessageCount,
-        durationSeconds,
-        finishedReason: "END_INTERVIEW",
-      });
-
-      void finalizeTranscriptOnce({
-        finalMessagesSnapshot: args.finalMessagesSnapshot,
-        finalThreadId: args.finalThreadId,
-        finishedReason: "END_INTERVIEW",
-        durationSeconds,
-      });
     }
+
+    sendChatCompletionSummary({
+      threadId: args.finalThreadId,
+      messageCount: args.messageCount,
+      userMessageCount: args.userMessageCount,
+      durationSeconds,
+      finishedReason,
+    });
+
+    void finalizeTranscriptOnce({
+      finalMessagesSnapshot: args.finalMessagesSnapshot,
+      finalThreadId: args.finalThreadId,
+      finishedReason,
+      durationSeconds,
+    });
   }
 
   // Chat sending
