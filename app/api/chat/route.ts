@@ -83,8 +83,7 @@ export async function POST(req: Request) {
     const incomingTranscriptId = body?.transcriptId;
     const transcriptId = safeId(incomingTranscriptId);
 
-    const inputMode: "text" | "audio" =
-      rawInputMode === "audio" ? "audio" : "text";
+    const inputMode: "text" | "audio" = rawInputMode === "audio" ? "audio" : "text";
 
     if (!message || typeof message !== "string") {
       return NextResponse.json({ error: "No message provided" }, { status: 400 });
@@ -98,22 +97,43 @@ export async function POST(req: Request) {
       );
     }
 
-    const threadId =
-      typeof incomingThreadId === "string" &&
-      incomingThreadId.startsWith("thread_")
+    const existingThreadId =
+      typeof incomingThreadId === "string" && incomingThreadId.startsWith("thread_")
         ? incomingThreadId
         : null;
 
-    const thread = threadId
-      ? await openai.beta.threads.retrieve(threadId)
+    const thread = existingThreadId
+      ? await openai.beta.threads.retrieve(existingThreadId)
       : await openai.beta.threads.create();
+
+    const isNewThread = !existingThreadId;
 
     console.log("New user message", {
       threadId: thread.id,
       inputMode,
       transcriptId: transcriptId || null,
       topBenefit: topBenefit || null,
+      isNewThread,
     });
+
+    // If TopBenefit exists, inject it once as survey context on thread creation.
+    // Do NOT use run.instructions, because that overrides your assistant’s full interview instructions.
+    if (isNewThread && topBenefit) {
+      const contextMessage =
+        `SURVEY_CONTEXT (provided by the survey system, not the participant): ` +
+        `The participant ranked "${topBenefit}" as the MOST IMPORTANT potential benefit of AI in future VR environments.\n\n` +
+        `INTERVIEWER INSTRUCTION: When you ask Question 4, explicitly name that ranked benefit using the exact wording above. ` +
+        `Do not ask the participant to restate the benefit. Treat this ranking as authoritative.`;
+
+      await openai.beta.threads.messages.create(thread.id, {
+        role: "user",
+        content: contextMessage,
+        metadata: {
+          contextType: "survey_context",
+          topBenefit,
+        },
+      });
+    }
 
     if (transcriptId) {
       try {
@@ -144,23 +164,13 @@ export async function POST(req: Request) {
         last_user_input_mode: inputMode,
         ...(topBenefit ? { topBenefit } : {}),
       },
-      instructions: topBenefit
-        ? `Context from the survey ranking task:
-The participant ranked "${topBenefit}" as the MOST IMPORTANT potential benefit of AI in future VR environments.
-
-When you ask Question 4:
-- Explicitly reference this ranked benefit using the exact wording above.
-- Do NOT infer or guess the ranked benefit from earlier chat responses.
-- Treat this ranking as authoritative even if the participant mentions other benefits later.`
-        : undefined,
+      // IMPORTANT: no "instructions" field here
     });
 
     if (run.status !== "completed") {
       return NextResponse.json(
         {
-          error:
-            run.last_error?.message ||
-            `Run ended with status ${run.status}`,
+          error: run.last_error?.message || `Run ended with status ${run.status}`,
         },
         { status: 500 }
       );
@@ -170,9 +180,7 @@ When you ask Question 4:
       limit: 20,
     });
 
-    const lastAssistantMsg = msgs.data.find(
-      (m) => m.role === "assistant"
-    );
+    const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
 
     let reply =
       lastAssistantMsg?.content?.[0]?.type === "text"
