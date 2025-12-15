@@ -23,6 +23,9 @@ export default function Home() {
   const transcriptIdRef = useRef<string | null>(null);
   const transcriptFinalizedRef = useRef(false);
 
+  // Keep a stable startedAt for the transcript once created
+  const transcriptStartedAtRef = useRef<string | null>(null);
+
   // Audio recording
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -36,9 +39,7 @@ export default function Home() {
   const maxAmplitudeRef = useRef<number>(0);
 
   // Banner status inside the iframe
-  const [interviewStatus, setInterviewStatus] = useState(
-    "Chat in progress…"
-  );
+  const [interviewStatus, setInterviewStatus] = useState("Chat in progress…");
 
   // Tracking for Qualtrics summary
   const chatStartTimeRef = useRef<number | null>(null);
@@ -145,15 +146,20 @@ export default function Home() {
     startedAt: string | null;
   }> {
     if (transcriptIdRef.current) {
-      return { id: transcriptIdRef.current, startedAt: null };
+      return {
+        id: transcriptIdRef.current,
+        startedAt: transcriptStartedAtRef.current,
+      };
     }
 
     try {
+      const nowIso = new Date().toISOString();
+
       const res = await fetch("/api/transcript/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startedAt: new Date().toISOString(),
+          startedAt: nowIso,
           threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
         }),
       });
@@ -165,10 +171,15 @@ export default function Home() {
       if (data && typeof data.transcriptId === "string" && data.transcriptId) {
         transcriptIdRef.current = data.transcriptId;
         setTranscriptId(data.transcriptId);
-        return {
-          id: data.transcriptId,
-          startedAt: typeof data.startedAt === "string" ? data.startedAt : null,
-        };
+
+        const startedAt =
+          typeof data.startedAt === "string" && data.startedAt
+            ? data.startedAt
+            : nowIso;
+
+        transcriptStartedAtRef.current = startedAt;
+
+        return { id: data.transcriptId, startedAt };
       }
 
       return { id: null, startedAt: null };
@@ -180,6 +191,8 @@ export default function Home() {
   async function finalizeTranscriptOnce(args: {
     finalMessagesSnapshot: ChatMsg[];
     finalThreadId: string | null;
+    finishedReason: string;
+    durationSeconds: number | null;
   }) {
     if (transcriptFinalizedRef.current) return;
     transcriptFinalizedRef.current = true;
@@ -188,6 +201,7 @@ export default function Home() {
     if (!started.id) return;
 
     const startedAt = started.startedAt || new Date().toISOString();
+    const endedAt = new Date().toISOString();
 
     const fullText = buildFinalTranscript({
       transcriptId: started.id,
@@ -195,6 +209,26 @@ export default function Home() {
       threadId: args.finalThreadId,
       allMsgs: args.finalMessagesSnapshot,
     });
+
+    const messageCount = args.finalMessagesSnapshot.length;
+    const userMessageCount = args.finalMessagesSnapshot.filter(
+      (m) => m.role === "user"
+    ).length;
+    const assistantMessageCount = args.finalMessagesSnapshot.filter(
+      (m) => m.role === "assistant"
+    ).length;
+
+    const metadata = {
+      threadId: args.finalThreadId,
+      startedAt,
+      endedAt,
+      durationSeconds: args.durationSeconds,
+      finishedReason: args.finishedReason,
+      messageCount,
+      userMessageCount,
+      assistantMessageCount,
+      completionTimestamp: endedAt,
+    };
 
     try {
       await fetch("/api/transcript/append", {
@@ -204,6 +238,7 @@ export default function Home() {
           transcriptId: started.id,
           mode: "finalize",
           fullText,
+          metadata,
         }),
       });
     } catch {
@@ -280,6 +315,8 @@ export default function Home() {
       void finalizeTranscriptOnce({
         finalMessagesSnapshot: args.finalMessagesSnapshot,
         finalThreadId: args.finalThreadId,
+        finishedReason: "END_INTERVIEW",
+        durationSeconds,
       });
     }
   }
@@ -295,9 +332,8 @@ export default function Home() {
     }
 
     const currentMessages = messages;
-    const existingUserCount = currentMessages.filter(
-      (m) => m.role === "user"
-    ).length;
+    const existingUserCount = currentMessages.filter((m) => m.role === "user")
+      .length;
     const newUserMessageCount = existingUserCount + 1;
 
     const userMsg: ChatMsg = { role: "user", text: trimmed };
@@ -656,9 +692,7 @@ export default function Home() {
 
   // Send audio to backend for transcription
 
-  async function sendAudioForTranscription(
-    audioBlob: Blob
-  ): Promise<string | null> {
+  async function sendAudioForTranscription(audioBlob: Blob): Promise<string | null> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -766,7 +800,9 @@ export default function Home() {
         }}
       >
         {messages.length === 0 && !isLoading && (
-          <p style={{ color: "#666" }}>When you’re ready, you can start by saying hello.</p>
+          <p style={{ color: "#666" }}>
+            When you’re ready, you can start by saying hello.
+          </p>
         )}
 
         {messages.map((m, i) => {
@@ -838,13 +874,7 @@ export default function Home() {
                 )}
               </div>
 
-              {!isUser && (
-                <div
-                  style={{
-                    height: 6,
-                  }}
-                />
-              )}
+              {!isUser && <div style={{ height: 6 }} />}
             </React.Fragment>
           );
         })}

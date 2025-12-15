@@ -38,6 +38,28 @@ async function readExistingText(url: string): Promise<string> {
   return await r.text();
 }
 
+function isPlainObject(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Build a minimal metadata header:
+ *
+ * Metadata:
+ * { ...json... }
+ *
+ */
+function buildMetadataHeader(metadata: Record<string, any>) {
+  let jsonLine = "{}";
+  try {
+    jsonLine = JSON.stringify(metadata);
+  } catch {
+    jsonLine = '{"metadata":"unserializable"}';
+  }
+
+  return `Metadata:\n${jsonLine}\n\n`;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -55,8 +77,11 @@ export async function POST(req: Request) {
     const mode =
       typeof body?.mode === "string" ? body.mode.trim().toLowerCase() : "append";
 
-    // Mode: finalize (recommended)
-    // Payload: { transcriptId, mode: "finalize", fullText: string }
+    // -----------------------
+    // FINALIZE MODE
+    // -----------------------
+    // Payload:
+    // { transcriptId, mode: "finalize", fullText: string, metadata?: object }
     if (mode === "finalize") {
       const fullText = body?.fullText;
 
@@ -67,12 +92,21 @@ export async function POST(req: Request) {
         );
       }
 
-      const safe = cleanTextBlock(fullText);
-      if (!safe) {
+      const safeTranscript = cleanTextBlock(fullText);
+      if (!safeTranscript) {
         return NextResponse.json({ ok: true, skipped: true });
       }
 
-      const finalText = safe.endsWith("\n") ? safe : safe + "\n";
+      const metadata = isPlainObject(body?.metadata)
+        ? body.metadata
+        : undefined;
+
+      const header = metadata ? buildMetadataHeader(metadata) : "";
+      const transcriptBody = safeTranscript.endsWith("\n")
+        ? safeTranscript
+        : safeTranscript + "\n";
+
+      const finalText = header + transcriptBody;
 
       await put(path, finalText, {
         access: "public",
@@ -81,13 +115,16 @@ export async function POST(req: Request) {
         allowOverwrite: true,
       });
 
-      return NextResponse.json({ ok: true, mode: "finalize" });
+      return NextResponse.json({
+        ok: true,
+        mode: "finalize",
+        metadataIncluded: !!metadata,
+      });
     }
 
-    // Mode: append (legacy, best-effort)
-    // Support payload styles:
-    // 1) { transcriptId, role, text, ts }
-    // 2) { transcriptId, line, ts? }
+    // -----------------------
+    // APPEND MODE (LEGACY)
+    // -----------------------
     const ts = typeof body?.ts === "string" ? body.ts : new Date().toISOString();
 
     let newLine = "";
@@ -108,7 +145,7 @@ export async function POST(req: Request) {
             ok: false,
             error: "Invalid role",
             receivedRole: body?.role ?? null,
-            hint: 'Expected role "user" or "assistant" (or "You"/"AI" aliases).',
+            hint: 'Expected role "user" or "assistant".',
           },
           { status: 400 }
         );
@@ -127,8 +164,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Read the current blob, append, and write back.
-    // This is not atomic, so we keep it only for backwards compatibility.
     const existing = await list({ prefix: path, limit: 5 });
     const match = existing.blobs.find((b) => b.pathname === path);
 
