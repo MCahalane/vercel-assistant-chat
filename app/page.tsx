@@ -18,6 +18,9 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
+  // NEW: context passed from Qualtrics (via URL or postMessage)
+  const [topBenefit, setTopBenefit] = useState<string>("");
+
   // Transcript recording (Blob)
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
   const transcriptIdRef = useRef<string | null>(null);
@@ -57,6 +60,39 @@ export default function Home() {
 
   // Track transcribing transitions for autofocus
   const wasTranscribingRef = useRef(false);
+
+  // NEW: read topBenefit from URL on first load
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tb = (params.get("topBenefit") || "").trim();
+      if (tb) setTopBenefit(tb);
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  // NEW: listen for Qualtrics context via postMessage
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handler = (event: MessageEvent) => {
+      const data: any = event?.data;
+      if (!data || typeof data !== "object") return;
+
+      if (data.type === "qualtrics_context") {
+        const tb = typeof data.topBenefit === "string" ? data.topBenefit.trim() : "";
+        if (tb) setTopBenefit(tb);
+      }
+    };
+
+    window.addEventListener("message", handler);
+    return () => {
+      window.removeEventListener("message", handler);
+    };
+  }, []);
 
   // Auto scroll to latest message when messages or loading state change
   useEffect(() => {
@@ -312,7 +348,6 @@ export default function Home() {
 
     let finishedReason: "END_INTERVIEW" | "INTERVIEW_FAILED" | null = null;
 
-    // IMPORTANT: Check INTERVIEW_FAILED first, in case the assistant text includes both strings for any reason
     if (args.assistantText.includes("INTERVIEW_FAILED")) {
       finishedReason = "INTERVIEW_FAILED";
     } else if (args.assistantText.includes("END_INTERVIEW")) {
@@ -372,7 +407,6 @@ export default function Home() {
       interviewStartedAtIsoRef.current = new Date().toISOString();
       transcriptStartedAtRef.current = interviewStartedAtIsoRef.current;
 
-      // Start transcript early so "startedAt" reflects the true start of the chat
       void ensureTranscriptStarted(interviewStartedAtIsoRef.current);
     }
 
@@ -393,6 +427,7 @@ export default function Home() {
         message: string;
         threadId?: string;
         inputMode: InputMode;
+        topBenefit?: string;
       } = {
         message: trimmed,
         inputMode,
@@ -400,6 +435,11 @@ export default function Home() {
 
       if (threadId && threadId.startsWith("thread_")) {
         payload.threadId = threadId;
+      }
+
+      // NEW: pass topBenefit to the server so it can build the prompt
+      if (topBenefit && topBenefit.trim()) {
+        payload.topBenefit = topBenefit.trim();
       }
 
       const res = await fetch("/api/chat", {
@@ -606,7 +646,6 @@ export default function Home() {
 
       const AudioContextClass =
         window.AudioContext ||
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (window as any).webkitAudioContext;
 
       if (AudioContextClass) {
@@ -702,6 +741,7 @@ export default function Home() {
       };
 
       mediaRecorderRef.current = mediaRecorder;
+      recordedChunksRef.current = [];
       mediaRecorder.start();
       setIsRecording(true);
 

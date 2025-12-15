@@ -12,14 +12,30 @@ function safeId(value: unknown) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  // keep IDs/path segments simple
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, "");
 }
 
 function safeText(value: unknown) {
   if (typeof value !== "string") return "";
-  // keep text readable in a file, avoid odd control chars
   return value.replace(/\r/g, "");
+}
+
+function safeContextValue(value: unknown) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  // keep it readable and safe to log or insert
+  return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 240);
+}
+
+function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
+  if (!reply || typeof reply !== "string") return reply;
+  if (!topBenefit) return reply;
+
+  // Replace common placeholder variants if they appear verbatim
+  return reply
+    .replaceAll("${TopBenefit}", topBenefit)
+    .replaceAll("${topBenefit}", topBenefit);
 }
 
 async function writeTranscriptMessage(args: {
@@ -61,11 +77,14 @@ export async function POST(req: Request) {
     const incomingThreadId = body?.threadId;
     const rawInputMode = body?.inputMode;
 
+    // NEW: accept TopBenefit context from the client
+    const incomingTopBenefit = body?.topBenefit;
+    const topBenefit = safeContextValue(incomingTopBenefit);
+
     // Optional: transcript tracking (created by /api/transcript/start)
     const incomingTranscriptId = body?.transcriptId;
     const transcriptId = safeId(incomingTranscriptId);
 
-    // Normalise inputMode to "text" | "audio"
     const inputMode: "text" | "audio" =
       rawInputMode === "audio" ? "audio" : "text";
 
@@ -81,13 +100,11 @@ export async function POST(req: Request) {
       );
     }
 
-    // Only accept a real thread id string like "thread_abc123"
     const threadId =
       typeof incomingThreadId === "string" && incomingThreadId.startsWith("thread_")
         ? incomingThreadId
         : null;
 
-    // Create a thread if we don't have a valid one yet
     const thread = threadId
       ? await openai.beta.threads.retrieve(threadId)
       : await openai.beta.threads.create();
@@ -96,9 +113,9 @@ export async function POST(req: Request) {
       threadId: thread.id,
       inputMode,
       transcriptId: transcriptId || null,
+      topBenefit: topBenefit || null,
     });
 
-    // Store the user message as a separate blob file (if transcriptId provided)
     if (transcriptId) {
       try {
         await writeTranscriptMessage({
@@ -113,7 +130,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Add user message to OpenAI thread, tagged with inputMode in metadata
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: message,
@@ -122,13 +138,19 @@ export async function POST(req: Request) {
       },
     });
 
-    // Create run and wait for completion (official helper)
+    // Create run and wait for completion
     const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
       assistant_id: assistantId,
       metadata: {
         last_user_input_mode: inputMode,
+        ...(topBenefit ? { top_benefit: topBenefit } : {}),
       },
-    });
+      // Optional extra context. This does not override your assistant instructions.
+      // It just gives the assistant the value to use when referencing the ranked benefit.
+      additional_instructions: topBenefit
+        ? `Context for this session: The participant's top ranked benefit is: "${topBenefit}". When referring to the ranked benefit, use that exact wording.`
+        : undefined,
+    } as any);
 
     if (run.status !== "completed") {
       return NextResponse.json(
@@ -139,19 +161,20 @@ export async function POST(req: Request) {
       );
     }
 
-    // Fetch latest assistant reply
     const msgs = await openai.beta.threads.messages.list(run.thread_id, {
       limit: 20,
     });
 
     const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
 
-    const reply =
+    let reply =
       lastAssistantMsg?.content?.[0]?.type === "text"
         ? lastAssistantMsg.content[0].text.value
         : "No assistant reply found.";
 
-    // Store the assistant reply as a separate blob file (if transcriptId provided)
+    // NEW: guarantee placeholder substitution on the way out
+    reply = applyTopBenefitSubstitution(reply, topBenefit);
+
     if (transcriptId) {
       try {
         await writeTranscriptMessage({
