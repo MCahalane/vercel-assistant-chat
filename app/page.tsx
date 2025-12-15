@@ -9,6 +9,16 @@ type ChatMsg = {
 
 type InputMode = "text" | "audio";
 
+function readTopBenefitFromUrl(): string {
+  try {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    return (params.get("topBenefit") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -18,8 +28,10 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
-  // NEW: context passed from Qualtrics (via URL or postMessage)
-  const [topBenefit, setTopBenefit] = useState<string>("");
+  // NEW: capture TopBenefit from URL on first render
+  const [topBenefit, setTopBenefit] = useState<string>(() =>
+    readTopBenefitFromUrl()
+  );
 
   // Transcript recording (Blob)
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
@@ -61,37 +73,13 @@ export default function Home() {
   // Track transcribing transitions for autofocus
   const wasTranscribingRef = useRef(false);
 
-  // NEW: read topBenefit from URL on first load
+  // If URL changes for any reason, re read topBenefit (rare, but safe)
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const tb = (params.get("topBenefit") || "").trim();
-      if (tb) setTopBenefit(tb);
-    } catch {
-      // Ignore
+    const tb = readTopBenefitFromUrl();
+    if (tb && tb !== topBenefit) {
+      setTopBenefit(tb);
     }
-  }, []);
-
-  // NEW: listen for Qualtrics context via postMessage
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const handler = (event: MessageEvent) => {
-      const data: any = event?.data;
-      if (!data || typeof data !== "object") return;
-
-      if (data.type === "qualtrics_context") {
-        const tb = typeof data.topBenefit === "string" ? data.topBenefit.trim() : "";
-        if (tb) setTopBenefit(tb);
-      }
-    };
-
-    window.addEventListener("message", handler);
-    return () => {
-      window.removeEventListener("message", handler);
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto scroll to latest message when messages or loading state change
@@ -242,7 +230,9 @@ export default function Home() {
     if (transcriptFinalizedRef.current) return;
     transcriptFinalizedRef.current = true;
 
-    const started = await ensureTranscriptStarted(interviewStartedAtIsoRef.current);
+    const started = await ensureTranscriptStarted(
+      interviewStartedAtIsoRef.current
+    );
     if (!started.id) return;
 
     const interviewStartedAt =
@@ -284,7 +274,6 @@ export default function Home() {
       userMessageCount,
       assistantMessageCount,
 
-      // Legacy compatibility fields (so older downstream parsing does not break)
       startedAt: interviewStartedAt,
       endedAt: interviewEndedAt,
       completionTimestamp: transcriptWrittenAt,
@@ -372,9 +361,7 @@ export default function Home() {
         "This chat has ended. You may return to the survey and press Next."
       );
     } else {
-      setInterviewStatus(
-        "Chat complete. You may return to the survey and press Next."
-      );
+      setInterviewStatus("Chat complete. You may return to the survey and press Next.");
     }
 
     sendChatCompletionSummary({
@@ -406,7 +393,6 @@ export default function Home() {
     if (!interviewStartedAtIsoRef.current) {
       interviewStartedAtIsoRef.current = new Date().toISOString();
       transcriptStartedAtRef.current = interviewStartedAtIsoRef.current;
-
       void ensureTranscriptStarted(interviewStartedAtIsoRef.current);
     }
 
@@ -437,7 +423,6 @@ export default function Home() {
         payload.threadId = threadId;
       }
 
-      // NEW: pass topBenefit to the server so it can build the prompt
       if (topBenefit && topBenefit.trim()) {
         payload.topBenefit = topBenefit.trim();
       }
@@ -451,8 +436,7 @@ export default function Home() {
       const data = await res.json();
 
       if (!res.ok) {
-        const errText =
-          data?.error || "Something went wrong calling the server.";
+        const errText = data?.error || "Something went wrong calling the server.";
         const assistantErrMsg: ChatMsg = { role: "assistant", text: errText };
 
         const nextMessagesAfterErr = [...nextMessagesAfterUser, assistantErrMsg];
@@ -465,19 +449,13 @@ export default function Home() {
       const assistantText: string = data.reply || "No reply received.";
       const assistantMsg: ChatMsg = { role: "assistant", text: assistantText };
 
-      const nextMessagesAfterAssistant = [
-        ...nextMessagesAfterUser,
-        assistantMsg,
-      ];
+      const nextMessagesAfterAssistant = [...nextMessagesAfterUser, assistantMsg];
       setMessages(nextMessagesAfterAssistant);
 
       setInputMode("text");
 
       let finalThreadId = threadId;
-      if (
-        typeof data.threadId === "string" &&
-        data.threadId.startsWith("thread_")
-      ) {
+      if (typeof data.threadId === "string" && data.threadId.startsWith("thread_")) {
         setThreadId(data.threadId);
         finalThreadId = data.threadId;
       }
@@ -646,6 +624,7 @@ export default function Home() {
 
       const AudioContextClass =
         window.AudioContext ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (window as any).webkitAudioContext;
 
       if (AudioContextClass) {
@@ -705,11 +684,7 @@ export default function Home() {
         const TOO_SHORT_MS = 800;
         const TOO_QUIET_THRESHOLD = 0.08;
 
-        if (
-          !durationMs ||
-          durationMs < TOO_SHORT_MS ||
-          maxAmplitude < TOO_QUIET_THRESHOLD
-        ) {
+        if (!durationMs || durationMs < TOO_SHORT_MS || maxAmplitude < TOO_QUIET_THRESHOLD) {
           showCouldNotUnderstand();
           return;
         }
@@ -741,15 +716,11 @@ export default function Home() {
       };
 
       mediaRecorderRef.current = mediaRecorder;
-      recordedChunksRef.current = [];
       mediaRecorder.start();
       setIsRecording(true);
 
       setTimeout(() => {
-        if (
-          mediaRecorderRef.current === mediaRecorder &&
-          mediaRecorder.state === "recording"
-        ) {
+        if (mediaRecorderRef.current === mediaRecorder && mediaRecorder.state === "recording") {
           mediaRecorder.stop();
           setIsRecording(false);
         }
@@ -777,9 +748,7 @@ export default function Home() {
 
   // Send audio to backend for transcription
 
-  async function sendAudioForTranscription(
-    audioBlob: Blob
-  ): Promise<string | null> {
+  async function sendAudioForTranscription(audioBlob: Blob): Promise<string | null> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -818,9 +787,7 @@ export default function Home() {
     flexShrink: 0,
   };
 
-  const textareaPlaceholder = isTranscribing
-    ? "Transcribing audio…"
-    : "Type your message...";
+  const textareaPlaceholder = isTranscribing ? "Transcribing audio…" : "Type your message...";
 
   return (
     <main
@@ -907,14 +874,7 @@ export default function Home() {
                 }}
               >
                 {!isUser && (
-                  <div
-                    style={{
-                      ...avatarBase,
-                      background: "#111827",
-                    }}
-                  >
-                    A
-                  </div>
+                  <div style={{ ...avatarBase, background: "#111827" }}>A</div>
                 )}
 
                 <div
@@ -949,16 +909,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {isUser && (
-                  <div
-                    style={{
-                      ...avatarBase,
-                      background: "#2563eb",
-                    }}
-                  >
-                    Y
-                  </div>
-                )}
+                {isUser && <div style={{ ...avatarBase, background: "#2563eb" }}>Y</div>}
               </div>
 
               {!isUser && <div style={{ height: 6 }} />}
@@ -967,36 +918,10 @@ export default function Home() {
         })}
 
         {isLoading && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-start",
-              marginTop: 4,
-              gap: 6,
-            }}
-          >
-            <div
-              style={{
-                ...avatarBase,
-                background: "#111827",
-              }}
-            >
-              A
-            </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "flex-start",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "#6b7280",
-                  marginBottom: 2,
-                }}
-              >
+          <div style={{ display: "flex", justifyContent: "flex-start", marginTop: 4, gap: 6 }}>
+            <div style={{ ...avatarBase, background: "#111827" }}>A</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+              <span style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
                 AI Assistant
               </span>
               <div
@@ -1025,13 +950,7 @@ export default function Home() {
 
       {isRecording && (
         <div style={{ marginTop: 12 }}>
-          <p
-            style={{
-              marginBottom: 8,
-              fontSize: 13,
-              color: "#4b5563",
-            }}
-          >
+          <p style={{ marginBottom: 8, fontSize: 13, color: "#4b5563" }}>
             Recording… please speak clearly into your microphone.
           </p>
           <canvas
@@ -1090,9 +1009,7 @@ export default function Home() {
             color: isRecording ? "white" : "inherit",
             fontSize: 18,
             cursor: isLoading || isTranscribing ? "default" : "pointer",
-            animation: isRecording
-              ? "pulseRecording 1.2s ease-in-out infinite"
-              : "none",
+            animation: isRecording ? "pulseRecording 1.2s ease-in-out infinite" : "none",
             transformOrigin: "center",
             opacity: isLoading || isTranscribing ? 0.7 : 1,
           }}
@@ -1106,17 +1023,11 @@ export default function Home() {
             padding: "10px 14px",
             borderRadius: 6,
             border: "none",
-            background:
-              isLoading || isTranscribing || !input.trim()
-                ? "#6b7280"
-                : "#111827",
+            background: isLoading || isTranscribing || !input.trim() ? "#6b7280" : "#111827",
             opacity: isLoading || isTranscribing || !input.trim() ? 0.7 : 1,
             color: "white",
             fontSize: 16,
-            cursor:
-              isLoading || isTranscribing || !input.trim()
-                ? "default"
-                : "pointer",
+            cursor: isLoading || isTranscribing || !input.trim() ? "default" : "pointer",
           }}
         >
           {isLoading ? "Sending…" : "Send"}

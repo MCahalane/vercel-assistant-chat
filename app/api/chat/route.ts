@@ -24,7 +24,6 @@ function safeContextValue(value: unknown) {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
   if (!trimmed) return "";
-  // keep it readable and safe to log or insert
   return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 240);
 }
 
@@ -32,10 +31,11 @@ function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
   if (!reply || typeof reply !== "string") return reply;
   if (!topBenefit) return reply;
 
-  // Replace common placeholder variants if they appear verbatim
   return reply
     .replaceAll("${TopBenefit}", topBenefit)
-    .replaceAll("${topBenefit}", topBenefit);
+    .replaceAll("${topBenefit}", topBenefit)
+    .replaceAll("{TopBenefit}", topBenefit)
+    .replaceAll("{topBenefit}", topBenefit);
 }
 
 async function writeTranscriptMessage(args: {
@@ -77,11 +77,9 @@ export async function POST(req: Request) {
     const incomingThreadId = body?.threadId;
     const rawInputMode = body?.inputMode;
 
-    // NEW: accept TopBenefit context from the client
     const incomingTopBenefit = body?.topBenefit;
     const topBenefit = safeContextValue(incomingTopBenefit);
 
-    // Optional: transcript tracking (created by /api/transcript/start)
     const incomingTranscriptId = body?.transcriptId;
     const transcriptId = safeId(incomingTranscriptId);
 
@@ -101,7 +99,8 @@ export async function POST(req: Request) {
     }
 
     const threadId =
-      typeof incomingThreadId === "string" && incomingThreadId.startsWith("thread_")
+      typeof incomingThreadId === "string" &&
+      incomingThreadId.startsWith("thread_")
         ? incomingThreadId
         : null;
 
@@ -135,27 +134,33 @@ export async function POST(req: Request) {
       content: message,
       metadata: {
         inputMode,
+        ...(topBenefit ? { topBenefit } : {}),
       },
     });
 
-    // Create run and wait for completion
     const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
       assistant_id: assistantId,
       metadata: {
         last_user_input_mode: inputMode,
-        ...(topBenefit ? { top_benefit: topBenefit } : {}),
+        ...(topBenefit ? { topBenefit } : {}),
       },
-      // Optional extra context. This does not override your assistant instructions.
-      // It just gives the assistant the value to use when referencing the ranked benefit.
-      additional_instructions: topBenefit
-        ? `Context for this session: The participant's top ranked benefit is: "${topBenefit}". When referring to the ranked benefit, use that exact wording.`
+      instructions: topBenefit
+        ? `Context from the survey ranking task:
+The participant ranked "${topBenefit}" as the MOST IMPORTANT potential benefit of AI in future VR environments.
+
+When you ask Question 4:
+- Explicitly reference this ranked benefit using the exact wording above.
+- Do NOT infer or guess the ranked benefit from earlier chat responses.
+- Treat this ranking as authoritative even if the participant mentions other benefits later.`
         : undefined,
-    } as any);
+    });
 
     if (run.status !== "completed") {
       return NextResponse.json(
         {
-          error: run.last_error?.message || `Run ended with status ${run.status}`,
+          error:
+            run.last_error?.message ||
+            `Run ended with status ${run.status}`,
         },
         { status: 500 }
       );
@@ -165,14 +170,15 @@ export async function POST(req: Request) {
       limit: 20,
     });
 
-    const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
+    const lastAssistantMsg = msgs.data.find(
+      (m) => m.role === "assistant"
+    );
 
     let reply =
       lastAssistantMsg?.content?.[0]?.type === "text"
         ? lastAssistantMsg.content[0].text.value
         : "No assistant reply found.";
 
-    // NEW: guarantee placeholder substitution on the way out
     reply = applyTopBenefitSubstitution(reply, topBenefit);
 
     if (transcriptId) {
