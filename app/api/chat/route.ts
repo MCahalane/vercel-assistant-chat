@@ -38,6 +38,17 @@ function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
     .replaceAll("{topBenefit}", topBenefit);
 }
 
+function applyTopRiskSubstitution(reply: string, topRisk: string) {
+  if (!reply || typeof reply !== "string") return reply;
+  if (!topRisk) return reply;
+
+  return reply
+    .replaceAll("${TopRisk}", topRisk)
+    .replaceAll("${topRisk}", topRisk)
+    .replaceAll("{TopRisk}", topRisk)
+    .replaceAll("{topRisk}", topRisk);
+}
+
 async function writeTranscriptMessage(args: {
   transcriptId: string;
   role: "user" | "assistant";
@@ -69,6 +80,61 @@ async function writeTranscriptMessage(args: {
   });
 }
 
+async function injectSurveyContext(args: {
+  threadId: string;
+  topBenefit: string;
+  topRisk: string;
+  isNewThread: boolean;
+}) {
+  const { threadId, topBenefit, topRisk, isNewThread } = args;
+
+  // If the thread is reused (common during testing or refresh),
+  // we still want the current survey context to be authoritative.
+  const prefix = isNewThread ? "SURVEY_CONTEXT" : "SURVEY_CONTEXT_UPDATE";
+
+  if (topBenefit) {
+    const benefitContextMessage =
+      `${prefix} (provided by the survey system, not the participant): ` +
+      `The participant ranked "${topBenefit}" as the MOST IMPORTANT potential benefit of AI in future VR environments.\n\n` +
+      `INTERVIEWER INSTRUCTION: When you ask Question 4, explicitly name that ranked benefit using the exact wording above. ` +
+      `Do not ask the participant to restate the benefit. Treat this ranking as authoritative.` +
+      (isNewThread
+        ? ""
+        : ` If any earlier context in this thread differs, override it with the value above.`);
+
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: benefitContextMessage,
+      metadata: {
+        contextType: "survey_context",
+        topBenefit,
+        contextUpdate: isNewThread ? "0" : "1",
+      },
+    });
+  }
+
+  if (topRisk) {
+    const riskContextMessage =
+      `${prefix} (provided by the survey system, not the participant): ` +
+      `The participant ranked "${topRisk}" as the MOST CONCERNING potential risk of AI in future VR environments.\n\n` +
+      `INTERVIEWER INSTRUCTION: When you ask Question 6, explicitly name that ranked risk using the exact wording above. ` +
+      `Do not ask the participant to restate the risk. Treat this ranking as authoritative.` +
+      (isNewThread
+        ? ""
+        : ` If any earlier context in this thread differs, override it with the value above.`);
+
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: riskContextMessage,
+      metadata: {
+        contextType: "survey_context",
+        topRisk,
+        contextUpdate: isNewThread ? "0" : "1",
+      },
+    });
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -77,8 +143,14 @@ export async function POST(req: Request) {
     const incomingThreadId = body?.threadId;
     const rawInputMode = body?.inputMode;
 
-    const incomingTopBenefit = body?.topBenefit;
+    // Be forgiving about key names in case the frontend ever changes casing.
+    const incomingTopBenefit =
+      body?.topBenefit ?? body?.TopBenefit ?? body?.top_benefit ?? body?.topbenefit;
     const topBenefit = safeContextValue(incomingTopBenefit);
+
+    const incomingTopRisk =
+      body?.topRisk ?? body?.TopRisk ?? body?.top_risk ?? body?.toprisk;
+    const topRisk = safeContextValue(incomingTopRisk);
 
     const incomingTranscriptId = body?.transcriptId;
     const transcriptId = safeId(incomingTranscriptId);
@@ -113,26 +185,24 @@ export async function POST(req: Request) {
       inputMode,
       transcriptId: transcriptId || null,
       topBenefit: topBenefit || null,
+      topRisk: topRisk || null,
       isNewThread,
     });
 
-    // If TopBenefit exists, inject it once as survey context on thread creation.
-    // Do NOT use run.instructions, because that overrides your assistant’s full interview instructions.
-    if (isNewThread && topBenefit) {
-      const contextMessage =
-        `SURVEY_CONTEXT (provided by the survey system, not the participant): ` +
-        `The participant ranked "${topBenefit}" as the MOST IMPORTANT potential benefit of AI in future VR environments.\n\n` +
-        `INTERVIEWER INSTRUCTION: When you ask Question 4, explicitly name that ranked benefit using the exact wording above. ` +
-        `Do not ask the participant to restate the benefit. Treat this ranking as authoritative.`;
-
-      await openai.beta.threads.messages.create(thread.id, {
-        role: "user",
-        content: contextMessage,
-        metadata: {
-          contextType: "survey_context",
+    // Inject survey context.
+    // Key change: if the thread is reused (common in testing), we still inject a context update
+    // so the current TopBenefit/TopRisk remains authoritative.
+    if (topBenefit || topRisk) {
+      try {
+        await injectSurveyContext({
+          threadId: thread.id,
           topBenefit,
-        },
-      });
+          topRisk,
+          isNewThread,
+        });
+      } catch (e) {
+        console.error("Survey context injection failed:", e);
+      }
     }
 
     if (transcriptId) {
@@ -155,6 +225,7 @@ export async function POST(req: Request) {
       metadata: {
         inputMode,
         ...(topBenefit ? { topBenefit } : {}),
+        ...(topRisk ? { topRisk } : {}),
       },
     });
 
@@ -163,6 +234,7 @@ export async function POST(req: Request) {
       metadata: {
         last_user_input_mode: inputMode,
         ...(topBenefit ? { topBenefit } : {}),
+        ...(topRisk ? { topRisk } : {}),
       },
       // IMPORTANT: no "instructions" field here
     });
@@ -188,6 +260,7 @@ export async function POST(req: Request) {
         : "No assistant reply found.";
 
     reply = applyTopBenefitSubstitution(reply, topBenefit);
+    reply = applyTopRiskSubstitution(reply, topRisk);
 
     if (transcriptId) {
       try {
