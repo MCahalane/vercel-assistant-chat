@@ -19,6 +19,16 @@ function readTopBenefitFromUrl(): string {
   }
 }
 
+function readTopRiskFromUrl(): string {
+  try {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    return (params.get("topRisk") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -28,10 +38,11 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
-  // NEW: capture TopBenefit from URL on first render
+  // NEW: capture TopBenefit and TopRisk from URL on first render
   const [topBenefit, setTopBenefit] = useState<string>(() =>
     readTopBenefitFromUrl()
   );
+  const [topRisk, setTopRisk] = useState<string>(() => readTopRiskFromUrl());
 
   // Transcript recording (Blob)
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
@@ -73,11 +84,16 @@ export default function Home() {
   // Track transcribing transitions for autofocus
   const wasTranscribingRef = useRef(false);
 
-  // If URL changes for any reason, re read topBenefit (rare, but safe)
+  // If URL changes for any reason, re read topBenefit/topRisk (rare, but safe)
   useEffect(() => {
     const tb = readTopBenefitFromUrl();
     if (tb && tb !== topBenefit) {
       setTopBenefit(tb);
+    }
+
+    const tr = readTopRiskFromUrl();
+    if (tr && tr !== topRisk) {
+      setTopRisk(tr);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -414,6 +430,7 @@ export default function Home() {
         threadId?: string;
         inputMode: InputMode;
         topBenefit?: string;
+        topRisk?: string;
       } = {
         message: trimmed,
         inputMode,
@@ -425,6 +442,10 @@ export default function Home() {
 
       if (topBenefit && topBenefit.trim()) {
         payload.topBenefit = topBenefit.trim();
+      }
+
+      if (topRisk && topRisk.trim()) {
+        payload.topRisk = topRisk.trim();
       }
 
       const res = await fetch("/api/chat", {
