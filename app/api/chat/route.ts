@@ -41,6 +41,11 @@ function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
   if (!topBenefit) return reply;
 
   return reply
+    // Qualtrics piped text placeholders
+    .replaceAll("${e://Field/TopBenefit}", topBenefit)
+    .replaceAll("${e://Field/topBenefit}", topBenefit)
+
+    // Your existing placeholders
     .replaceAll("${TopBenefit}", topBenefit)
     .replaceAll("${topBenefit}", topBenefit)
     .replaceAll("{TopBenefit}", topBenefit)
@@ -52,6 +57,11 @@ function applyTopRiskSubstitution(reply: string, topRisk: string) {
   if (!topRisk) return reply;
 
   return reply
+    // Qualtrics piped text placeholders
+    .replaceAll("${e://Field/TopRisk}", topRisk)
+    .replaceAll("${e://Field/topRisk}", topRisk)
+
+    // Your existing placeholders
     .replaceAll("${TopRisk}", topRisk)
     .replaceAll("${topRisk}", topRisk)
     .replaceAll("{TopRisk}", topRisk)
@@ -110,7 +120,9 @@ async function waitForNoActiveRun(threadId: string, maxWaitMs = 15000) {
       const runs = await openai.beta.threads.runs.list(threadId, { limit: 5 });
 
       const active = runs.data.find((r) =>
-        ["queued", "in_progress", "requires_action", "cancelling"].includes(r.status)
+        ["queued", "in_progress", "requires_action", "cancelling"].includes(
+          r.status
+        )
       );
 
       if (!active) return { ok: true as const };
@@ -206,7 +218,8 @@ export async function POST(req: Request) {
       body?.participantId ?? body?.ParticipantID ?? body?.participantID;
     const participantId = safeParticipantId(incomingParticipantId);
 
-    const inputMode: "text" | "audio" = rawInputMode === "audio" ? "audio" : "text";
+    const inputMode: "text" | "audio" =
+      rawInputMode === "audio" ? "audio" : "text";
 
     if (!message || typeof message !== "string") {
       return NextResponse.json({ error: "No message provided" }, { status: 400 });
@@ -221,7 +234,8 @@ export async function POST(req: Request) {
     }
 
     const existingThreadId =
-      typeof incomingThreadId === "string" && incomingThreadId.startsWith("thread_")
+      typeof incomingThreadId === "string" &&
+      incomingThreadId.startsWith("thread_")
         ? incomingThreadId
         : null;
 
