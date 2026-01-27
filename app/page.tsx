@@ -29,6 +29,28 @@ function readTopRiskFromUrl(): string {
   }
 }
 
+function readParticipantIdFromUrl(): string {
+  try {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+
+    // Accept common variants from Qualtrics and Prolific
+    const v =
+      params.get("participantId") ||
+      params.get("ParticipantID") ||
+      params.get("participantID") ||
+      params.get("PROLIFIC_PID") ||
+      params.get("prolificPid") ||
+      params.get("prolificID") ||
+      params.get("prolificPID") ||
+      "";
+
+    return (v || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -38,11 +60,14 @@ export default function Home() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [inputMode, setInputMode] = useState<InputMode>("text");
 
-  // NEW: capture TopBenefit and TopRisk from URL on first render
+  // Capture TopBenefit / TopRisk / ParticipantId from URL on first render
   const [topBenefit, setTopBenefit] = useState<string>(() =>
     readTopBenefitFromUrl()
   );
   const [topRisk, setTopRisk] = useState<string>(() => readTopRiskFromUrl());
+  const [participantId, setParticipantId] = useState<string>(() =>
+    readParticipantIdFromUrl()
+  );
 
   // Transcript recording (Blob)
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
@@ -84,7 +109,7 @@ export default function Home() {
   // Track transcribing transitions for autofocus
   const wasTranscribingRef = useRef(false);
 
-  // If URL changes for any reason, re read topBenefit/topRisk (rare, but safe)
+  // If URL changes for any reason, re-read topBenefit/topRisk/participantId (rare, but safe)
   useEffect(() => {
     const tb = readTopBenefitFromUrl();
     if (tb && tb !== topBenefit) {
@@ -95,8 +120,55 @@ export default function Home() {
     if (tr && tr !== topRisk) {
       setTopRisk(tr);
     }
+
+    const pid = readParticipantIdFromUrl();
+    if (pid && pid !== participantId) {
+      setParticipantId(pid);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Optional: accept Qualtrics postMessage context (in case URL params are missing or overwritten)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onMessage = (event: MessageEvent) => {
+      const data: any = event?.data;
+      if (!data || typeof data !== "object") return;
+
+      if (data.type !== "qualtrics_context") return;
+
+      if (typeof data.topBenefit === "string") {
+        const tb = data.topBenefit.trim();
+        if (tb && tb !== topBenefit) setTopBenefit(tb);
+      }
+
+      if (typeof data.topRisk === "string") {
+        const tr = data.topRisk.trim();
+        if (tr && tr !== topRisk) setTopRisk(tr);
+      }
+
+      if (typeof data.participantId === "string") {
+        const pid = data.participantId.trim();
+        if (pid && pid !== participantId) setParticipantId(pid);
+      }
+
+      // Also accept common variants for robustness
+      if (typeof data.ParticipantID === "string") {
+        const pid = data.ParticipantID.trim();
+        if (pid && pid !== participantId) setParticipantId(pid);
+      }
+
+      if (typeof data.PROLIFIC_PID === "string") {
+        const pid = data.PROLIFIC_PID.trim();
+        if (pid && pid !== participantId) setParticipantId(pid);
+      }
+    };
+
+    window.addEventListener("message", onMessage, false);
+    return () => window.removeEventListener("message", onMessage, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topBenefit, topRisk, participantId]);
 
   // Auto scroll to latest message when messages or loading state change
   useEffect(() => {
@@ -162,12 +234,14 @@ export default function Home() {
     transcriptId: string;
     startedAt: string;
     threadId: string | null;
+    participantId: string | null;
     allMsgs: ChatMsg[];
   }) {
     const headerLines: string[] = [];
     headerLines.push("Chat transcript");
     headerLines.push(`TranscriptId: ${args.transcriptId}`);
     headerLines.push(`StartedAt: ${args.startedAt}`);
+    if (args.participantId) headerLines.push(`ParticipantID: ${args.participantId}`);
     if (args.threadId) headerLines.push(`ThreadId: ${args.threadId}`);
     headerLines.push("");
 
@@ -210,6 +284,8 @@ export default function Home() {
         body: JSON.stringify({
           startedAt: startedAtIso,
           threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
+          // record ParticipantID at the top of the transcript header
+          participantId: participantId && participantId.trim() ? participantId.trim() : null,
         }),
       });
 
@@ -261,9 +337,13 @@ export default function Home() {
 
     const transcriptWrittenAt = new Date().toISOString();
 
+    const pid =
+      participantId && participantId.trim().length > 0 ? participantId.trim() : null;
+
     const fullText = buildFinalTranscript({
       transcriptId: started.id,
       startedAt: interviewStartedAt,
+      participantId: pid,
       threadId: args.finalThreadId,
       allMsgs: args.finalMessagesSnapshot,
     });
@@ -278,6 +358,7 @@ export default function Home() {
 
     const metadata = {
       threadId: args.finalThreadId,
+      participantId: pid,
 
       interviewStartedAt,
       interviewEndedAt,
@@ -377,7 +458,9 @@ export default function Home() {
         "This chat has ended. You may return to the survey and press Next."
       );
     } else {
-      setInterviewStatus("Chat complete. You may return to the survey and press Next.");
+      setInterviewStatus(
+        "Chat complete. You may return to the survey and press Next."
+      );
     }
 
     sendChatCompletionSummary({
@@ -413,8 +496,7 @@ export default function Home() {
     }
 
     const currentMessages = messages;
-    const existingUserCount = currentMessages.filter((m) => m.role === "user")
-      .length;
+    const existingUserCount = currentMessages.filter((m) => m.role === "user").length;
     const newUserMessageCount = existingUserCount + 1;
 
     const userMsg: ChatMsg = { role: "user", text: trimmed };
@@ -431,6 +513,7 @@ export default function Home() {
         inputMode: InputMode;
         topBenefit?: string;
         topRisk?: string;
+        participantId?: string;
       } = {
         message: trimmed,
         inputMode,
@@ -448,26 +531,54 @@ export default function Home() {
         payload.topRisk = topRisk.trim();
       }
 
+      if (participantId && participantId.trim()) {
+        payload.participantId = participantId.trim();
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const raw = await res.text();
 
-      if (!res.ok) {
-        const errText = data?.error || "Something went wrong calling the server.";
-        const assistantErrMsg: ChatMsg = { role: "assistant", text: errText };
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!data || typeof data !== "object") {
+        const assistantErrMsg: ChatMsg = {
+          role: "assistant",
+          text:
+            res.ok
+              ? "The server returned an unexpected response format. Please try again."
+              : `Server error (${res.status}). Please try again.`,
+        };
 
         const nextMessagesAfterErr = [...nextMessagesAfterUser, assistantErrMsg];
         setMessages(nextMessagesAfterErr);
-
-        setIsLoading(false);
         return;
       }
 
-      const assistantText: string = data.reply || "No reply received.";
+      if (!res.ok) {
+        const errText =
+          (typeof data?.error === "string" && data.error) ||
+          (typeof data?.message === "string" && data.message) ||
+          "Something went wrong calling the server.";
+
+        const assistantErrMsg: ChatMsg = { role: "assistant", text: errText };
+        const nextMessagesAfterErr = [...nextMessagesAfterUser, assistantErrMsg];
+        setMessages(nextMessagesAfterErr);
+        return;
+      }
+
+      const assistantText: string =
+        (typeof data.reply === "string" && data.reply) || "No reply received.";
+
       const assistantMsg: ChatMsg = { role: "assistant", text: assistantText };
 
       const nextMessagesAfterAssistant = [...nextMessagesAfterUser, assistantMsg];
@@ -705,7 +816,11 @@ export default function Home() {
         const TOO_SHORT_MS = 800;
         const TOO_QUIET_THRESHOLD = 0.08;
 
-        if (!durationMs || durationMs < TOO_SHORT_MS || maxAmplitude < TOO_QUIET_THRESHOLD) {
+        if (
+          !durationMs ||
+          durationMs < TOO_SHORT_MS ||
+          maxAmplitude < TOO_QUIET_THRESHOLD
+        ) {
           showCouldNotUnderstand();
           return;
         }
@@ -741,7 +856,10 @@ export default function Home() {
       setIsRecording(true);
 
       setTimeout(() => {
-        if (mediaRecorderRef.current === mediaRecorder && mediaRecorder.state === "recording") {
+        if (
+          mediaRecorderRef.current === mediaRecorder &&
+          mediaRecorder.state === "recording"
+        ) {
           mediaRecorder.stop();
           setIsRecording(false);
         }
@@ -769,7 +887,9 @@ export default function Home() {
 
   // Send audio to backend for transcription
 
-  async function sendAudioForTranscription(audioBlob: Blob): Promise<string | null> {
+  async function sendAudioForTranscription(
+    audioBlob: Blob
+  ): Promise<string | null> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -808,7 +928,9 @@ export default function Home() {
     flexShrink: 0,
   };
 
-  const textareaPlaceholder = isTranscribing ? "Transcribing audio…" : "Type your message...";
+  const textareaPlaceholder = isTranscribing
+    ? "Transcribing audio…"
+    : "Type your message...";
 
   return (
     <main
@@ -930,7 +1052,9 @@ export default function Home() {
                   </div>
                 </div>
 
-                {isUser && <div style={{ ...avatarBase, background: "#2563eb" }}>Y</div>}
+                {isUser && (
+                  <div style={{ ...avatarBase, background: "#2563eb" }}>Y</div>
+                )}
               </div>
 
               {!isUser && <div style={{ height: 6 }} />}
@@ -939,10 +1063,25 @@ export default function Home() {
         })}
 
         {isLoading && (
-          <div style={{ display: "flex", justifyContent: "flex-start", marginTop: 4, gap: 6 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-start",
+              marginTop: 4,
+              gap: 6,
+            }}
+          >
             <div style={{ ...avatarBase, background: "#111827" }}>A</div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-              <span style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-start",
+              }}
+            >
+              <span
+                style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}
+              >
                 AI Assistant
               </span>
               <div
@@ -1030,7 +1169,9 @@ export default function Home() {
             color: isRecording ? "white" : "inherit",
             fontSize: 18,
             cursor: isLoading || isTranscribing ? "default" : "pointer",
-            animation: isRecording ? "pulseRecording 1.2s ease-in-out infinite" : "none",
+            animation: isRecording
+              ? "pulseRecording 1.2s ease-in-out infinite"
+              : "none",
             transformOrigin: "center",
             opacity: isLoading || isTranscribing ? 0.7 : 1,
           }}
@@ -1044,11 +1185,17 @@ export default function Home() {
             padding: "10px 14px",
             borderRadius: 6,
             border: "none",
-            background: isLoading || isTranscribing || !input.trim() ? "#6b7280" : "#111827",
+            background:
+              isLoading || isTranscribing || !input.trim()
+                ? "#6b7280"
+                : "#111827",
             opacity: isLoading || isTranscribing || !input.trim() ? 0.7 : 1,
             color: "white",
             fontSize: 16,
-            cursor: isLoading || isTranscribing || !input.trim() ? "default" : "pointer",
+            cursor:
+              isLoading || isTranscribing || !input.trim()
+                ? "default"
+                : "pointer",
           }}
         >
           {isLoading ? "Sending…" : "Send"}
