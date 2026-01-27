@@ -27,12 +27,11 @@ function safeContextValue(value: unknown) {
   return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 240);
 }
 
-// ParticipantID: keep it as text-safe (do NOT over-sanitize to only [a-zA-Z0-9] because IDs can include hyphens etc).
+// ParticipantID: keep it as text safe (do not over sanitize to only [a-zA-Z0-9] because IDs can include hyphens etc).
 function safeParticipantId(value: unknown) {
   if (typeof value !== "string") return "";
   const trimmed = value.trim();
   if (!trimmed) return "";
-  // remove newlines/tabs; cap length to avoid bloating logs
   return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 120);
 }
 
@@ -41,15 +40,11 @@ function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
   if (!topBenefit) return reply;
 
   return reply
-    // Qualtrics piped text placeholders
-    .replaceAll("${e://Field/TopBenefit}", topBenefit)
-    .replaceAll("${e://Field/topBenefit}", topBenefit)
-
-    // Your existing placeholders
     .replaceAll("${TopBenefit}", topBenefit)
     .replaceAll("${topBenefit}", topBenefit)
     .replaceAll("{TopBenefit}", topBenefit)
-    .replaceAll("{topBenefit}", topBenefit);
+    .replaceAll("{topBenefit}", topBenefit)
+    .replaceAll("${e://Field/TopBenefit}", topBenefit);
 }
 
 function applyTopRiskSubstitution(reply: string, topRisk: string) {
@@ -57,15 +52,23 @@ function applyTopRiskSubstitution(reply: string, topRisk: string) {
   if (!topRisk) return reply;
 
   return reply
-    // Qualtrics piped text placeholders
-    .replaceAll("${e://Field/TopRisk}", topRisk)
-    .replaceAll("${e://Field/topRisk}", topRisk)
-
-    // Your existing placeholders
     .replaceAll("${TopRisk}", topRisk)
     .replaceAll("${topRisk}", topRisk)
     .replaceAll("{TopRisk}", topRisk)
-    .replaceAll("{topRisk}", topRisk);
+    .replaceAll("{topRisk}", topRisk)
+    .replaceAll("${e://Field/TopRisk}", topRisk);
+}
+
+function applyParticipantIdSubstitution(reply: string, participantId: string) {
+  if (!reply || typeof reply !== "string") return reply;
+  if (!participantId) return reply;
+
+  return reply
+    .replaceAll("${ParticipantID}", participantId)
+    .replaceAll("${participantId}", participantId)
+    .replaceAll("{ParticipantID}", participantId)
+    .replaceAll("{participantId}", participantId)
+    .replaceAll("${e://Field/ParticipantID}", participantId);
 }
 
 async function writeTranscriptMessage(args: {
@@ -105,13 +108,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Server-side guard against:
- * "Can't add messages to thread_... while a run ... is active"
- *
- * In a serverless environment we cannot rely on an in-memory lock,
- * so we query the API for recent runs and wait briefly if one is active.
- */
 async function waitForNoActiveRun(threadId: string, maxWaitMs = 15000) {
   const start = Date.now();
 
@@ -120,18 +116,14 @@ async function waitForNoActiveRun(threadId: string, maxWaitMs = 15000) {
       const runs = await openai.beta.threads.runs.list(threadId, { limit: 5 });
 
       const active = runs.data.find((r) =>
-        ["queued", "in_progress", "requires_action", "cancelling"].includes(
-          r.status
-        )
+        ["queued", "in_progress", "requires_action", "cancelling"].includes(r.status)
       );
 
       if (!active) return { ok: true as const };
 
-      // Run still active; wait and re-check
       await sleep(500);
       continue;
     } catch {
-      // If we can't list runs (rare), don't hard-fail; just proceed.
       return { ok: true as const };
     }
   }
@@ -234,12 +226,10 @@ export async function POST(req: Request) {
     }
 
     const existingThreadId =
-      typeof incomingThreadId === "string" &&
-      incomingThreadId.startsWith("thread_")
+      typeof incomingThreadId === "string" && incomingThreadId.startsWith("thread_")
         ? incomingThreadId
         : null;
 
-    // Retrieve existing thread, but if it fails (stale id), create a new one.
     let thread: { id: string };
     if (existingThreadId) {
       try {
@@ -266,19 +256,17 @@ export async function POST(req: Request) {
       isNewThread,
     });
 
-    // **Critical guard**: if a run is already active on this thread, wait briefly.
     const guard = await waitForNoActiveRun(thread.id, 15000);
     if (!guard.ok) {
       return NextResponse.json(
         {
           error:
-            "Please wait a moment — the assistant is still finishing the previous step. Then try sending again.",
+            "Please wait a moment. The assistant is still finishing the previous step. Then try sending again.",
         },
         { status: 409 }
       );
     }
 
-    // Inject survey context (TopBenefit/TopRisk only)
     if (topBenefit || topRisk) {
       try {
         await injectSurveyContext({
@@ -292,7 +280,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Transcript message logging (includes ParticipantID in the file header, if provided)
     if (transcriptId) {
       try {
         await writeTranscriptMessage({
@@ -308,7 +295,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // Send ONLY the participant's message to OpenAI (do NOT include ParticipantID)
+    // Send only the participant message to OpenAI. Do not include ParticipantID.
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: message,
@@ -341,7 +328,6 @@ export async function POST(req: Request) {
       limit: 20,
     });
 
-    // Messages list is typically newest-first, but we'll still select the newest assistant text safely.
     const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
 
     let reply =
@@ -351,6 +337,7 @@ export async function POST(req: Request) {
 
     reply = applyTopBenefitSubstitution(reply, topBenefit);
     reply = applyTopRiskSubstitution(reply, topRisk);
+    reply = applyParticipantIdSubstitution(reply, participantId);
 
     if (transcriptId) {
       try {
@@ -375,7 +362,6 @@ export async function POST(req: Request) {
   } catch (err: any) {
     console.error("Chat route error:", err);
 
-    // Always return JSON, even on unexpected errors.
     return NextResponse.json(
       { error: err?.message || "Server error" },
       { status: 500 }
