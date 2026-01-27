@@ -27,6 +27,15 @@ function safeContextValue(value: unknown) {
   return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 240);
 }
 
+// ParticipantID: keep it as text-safe (do NOT over-sanitize to only [a-zA-Z0-9] because IDs can include hyphens etc).
+function safeParticipantId(value: unknown) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  // remove newlines/tabs; cap length to avoid bloating logs
+  return trimmed.replace(/[\r\n\t]/g, " ").slice(0, 120);
+}
+
 function applyTopBenefitSubstitution(reply: string, topBenefit: string) {
   if (!reply || typeof reply !== "string") return reply;
   if (!topBenefit) return reply;
@@ -55,6 +64,7 @@ async function writeTranscriptMessage(args: {
   text: string;
   inputMode?: "text" | "audio";
   threadId?: string;
+  participantId?: string; // logging only
 }) {
   const transcriptId = safeId(args.transcriptId);
   if (!transcriptId) return;
@@ -67,6 +77,7 @@ async function writeTranscriptMessage(args: {
   const content =
     `Timestamp: ${ts}\n` +
     (args.threadId ? `ThreadId: ${args.threadId}\n` : "") +
+    (args.participantId ? `ParticipantID: ${args.participantId}\n` : "") +
     (args.inputMode ? `InputMode: ${args.inputMode}\n` : "") +
     `Role: ${args.role}\n\n` +
     safeText(args.text) +
@@ -80,6 +91,42 @@ async function writeTranscriptMessage(args: {
   });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Server-side guard against:
+ * "Can't add messages to thread_... while a run ... is active"
+ *
+ * In a serverless environment we cannot rely on an in-memory lock,
+ * so we query the API for recent runs and wait briefly if one is active.
+ */
+async function waitForNoActiveRun(threadId: string, maxWaitMs = 15000) {
+  const start = Date.now();
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const runs = await openai.beta.threads.runs.list(threadId, { limit: 5 });
+
+      const active = runs.data.find((r) =>
+        ["queued", "in_progress", "requires_action", "cancelling"].includes(r.status)
+      );
+
+      if (!active) return { ok: true as const };
+
+      // Run still active; wait and re-check
+      await sleep(500);
+      continue;
+    } catch {
+      // If we can't list runs (rare), don't hard-fail; just proceed.
+      return { ok: true as const };
+    }
+  }
+
+  return { ok: false as const };
+}
+
 async function injectSurveyContext(args: {
   threadId: string;
   topBenefit: string;
@@ -88,8 +135,6 @@ async function injectSurveyContext(args: {
 }) {
   const { threadId, topBenefit, topRisk, isNewThread } = args;
 
-  // If the thread is reused (common during testing or refresh),
-  // we still want the current survey context to be authoritative.
   const prefix = isNewThread ? "SURVEY_CONTEXT" : "SURVEY_CONTEXT_UPDATE";
 
   if (topBenefit) {
@@ -143,9 +188,11 @@ export async function POST(req: Request) {
     const incomingThreadId = body?.threadId;
     const rawInputMode = body?.inputMode;
 
-    // Be forgiving about key names in case the frontend ever changes casing.
     const incomingTopBenefit =
-      body?.topBenefit ?? body?.TopBenefit ?? body?.top_benefit ?? body?.topbenefit;
+      body?.topBenefit ??
+      body?.TopBenefit ??
+      body?.top_benefit ??
+      body?.topbenefit;
     const topBenefit = safeContextValue(incomingTopBenefit);
 
     const incomingTopRisk =
@@ -154,6 +201,10 @@ export async function POST(req: Request) {
 
     const incomingTranscriptId = body?.transcriptId;
     const transcriptId = safeId(incomingTranscriptId);
+
+    const incomingParticipantId =
+      body?.participantId ?? body?.ParticipantID ?? body?.participantID;
+    const participantId = safeParticipantId(incomingParticipantId);
 
     const inputMode: "text" | "audio" = rawInputMode === "audio" ? "audio" : "text";
 
@@ -174,24 +225,46 @@ export async function POST(req: Request) {
         ? incomingThreadId
         : null;
 
-    const thread = existingThreadId
-      ? await openai.beta.threads.retrieve(existingThreadId)
-      : await openai.beta.threads.create();
+    // Retrieve existing thread, but if it fails (stale id), create a new one.
+    let thread: { id: string };
+    if (existingThreadId) {
+      try {
+        const t = await openai.beta.threads.retrieve(existingThreadId);
+        thread = { id: t.id };
+      } catch {
+        const t = await openai.beta.threads.create();
+        thread = { id: t.id };
+      }
+    } else {
+      const t = await openai.beta.threads.create();
+      thread = { id: t.id };
+    }
 
-    const isNewThread = !existingThreadId;
+    const isNewThread = !existingThreadId || thread.id !== existingThreadId;
 
     console.log("New user message", {
       threadId: thread.id,
       inputMode,
       transcriptId: transcriptId || null,
+      participantId: participantId || null,
       topBenefit: topBenefit || null,
       topRisk: topRisk || null,
       isNewThread,
     });
 
-    // Inject survey context.
-    // Key change: if the thread is reused (common in testing), we still inject a context update
-    // so the current TopBenefit/TopRisk remains authoritative.
+    // **Critical guard**: if a run is already active on this thread, wait briefly.
+    const guard = await waitForNoActiveRun(thread.id, 15000);
+    if (!guard.ok) {
+      return NextResponse.json(
+        {
+          error:
+            "Please wait a moment — the assistant is still finishing the previous step. Then try sending again.",
+        },
+        { status: 409 }
+      );
+    }
+
+    // Inject survey context (TopBenefit/TopRisk only)
     if (topBenefit || topRisk) {
       try {
         await injectSurveyContext({
@@ -205,6 +278,7 @@ export async function POST(req: Request) {
       }
     }
 
+    // Transcript message logging (includes ParticipantID in the file header, if provided)
     if (transcriptId) {
       try {
         await writeTranscriptMessage({
@@ -213,12 +287,14 @@ export async function POST(req: Request) {
           text: message,
           inputMode,
           threadId: thread.id,
+          participantId: participantId || undefined,
         });
       } catch (e) {
         console.error("Transcript write (user) failed:", e);
       }
     }
 
+    // Send ONLY the participant's message to OpenAI (do NOT include ParticipantID)
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: message,
@@ -236,7 +312,6 @@ export async function POST(req: Request) {
         ...(topBenefit ? { topBenefit } : {}),
         ...(topRisk ? { topRisk } : {}),
       },
-      // IMPORTANT: no "instructions" field here
     });
 
     if (run.status !== "completed") {
@@ -252,6 +327,7 @@ export async function POST(req: Request) {
       limit: 20,
     });
 
+    // Messages list is typically newest-first, but we'll still select the newest assistant text safely.
     const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
 
     let reply =
@@ -269,6 +345,7 @@ export async function POST(req: Request) {
           role: "assistant",
           text: reply,
           threadId: run.thread_id,
+          participantId: participantId || undefined,
         });
       } catch (e) {
         console.error("Transcript write (assistant) failed:", e);
@@ -279,9 +356,12 @@ export async function POST(req: Request) {
       reply,
       threadId: run.thread_id,
       transcriptId: transcriptId || null,
+      participantId: participantId || null,
     });
   } catch (err: any) {
     console.error("Chat route error:", err);
+
+    // Always return JSON, even on unexpected errors.
     return NextResponse.json(
       { error: err?.message || "Server error" },
       { status: 500 }
