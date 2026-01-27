@@ -31,7 +31,7 @@ function safeIsoDate(value: unknown) {
 
 export async function POST(req: Request) {
   try {
-    // Optional JSON body, so later we can pass things like prolificId / threadId / startedAt
+    // Optional JSON body, so later we can pass things like participantId / prolificId / threadId / startedAt
     let body: any = null;
     try {
       body = await req.json();
@@ -44,6 +44,10 @@ export async function POST(req: Request) {
     // If client provides a real start time, respect it.
     const startedAt = safeIsoDate(body?.startedAt) || new Date().toISOString();
 
+    // Accept either casing to be robust
+    const participantId =
+      safeLine(body?.participantId) || safeLine(body?.ParticipantID);
+
     const prolificId = safeLine(body?.prolificId);
     const threadId = safeLine(body?.threadId);
 
@@ -53,6 +57,7 @@ export async function POST(req: Request) {
       `Chat transcript started\n` +
       `TranscriptId: ${transcriptId}\n` +
       `StartedAt: ${startedAt}\n` +
+      (participantId ? `ParticipantID: ${participantId}\n` : "") +
       (prolificId ? `ProlificId: ${prolificId}\n` : "") +
       (threadId ? `ThreadId: ${threadId}\n` : "") +
       `\n`;
@@ -70,6 +75,7 @@ export async function POST(req: Request) {
       startedAt,
       path,
       url: result.url,
+      participantId: participantId || null,
     });
   } catch (err: any) {
     return NextResponse.json(
