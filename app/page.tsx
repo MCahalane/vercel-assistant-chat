@@ -51,6 +51,38 @@ function readParticipantIdFromUrl(): string {
   }
 }
 
+/**
+ * Post JSON in a way that is resilient to page unload/navigation.
+ * 1) try fetch with keepalive
+ * 2) if that fails, try sendBeacon (best effort, no response)
+ */
+async function postJsonKeepalive(url: string, body: unknown): Promise<void> {
+  const payload = JSON.stringify(body);
+
+  // Attempt fetch keepalive first (lets us hit Next without aborting as often)
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true,
+    });
+    return;
+  } catch {
+    // Fall through to beacon
+  }
+
+  // Beacon fallback (no response, but very reliable during unload)
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      const blob = new Blob([payload], { type: "application/json" });
+      navigator.sendBeacon(url, blob);
+    }
+  } catch {
+    // Best effort only
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
@@ -284,9 +316,9 @@ export default function Home() {
         body: JSON.stringify({
           startedAt: startedAtIso,
           threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
-          // record ParticipantID at the top of the transcript header
           participantId: participantId && participantId.trim() ? participantId.trim() : null,
         }),
+        keepalive: true,
       });
 
       const data = await res.json();
@@ -376,21 +408,31 @@ export default function Home() {
       completionTimestamp: transcriptWrittenAt,
     };
 
+    // Use resilient post to survive unload/navigation.
+    // This is the main fix for "blank transcript file" when Qualtrics moves on quickly.
     try {
-      await fetch("/api/transcript/append", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcriptId: started.id,
-          mode: "finalize",
-          fullText,
-          metadata,
-        }),
+      await postJsonKeepalive("/api/transcript/append", {
+        transcriptId: started.id,
+        mode: "finalize",
+        fullText,
+        metadata,
       });
     } catch {
-      // Silent: do not interrupt participants
+      // Best effort only
     }
   }
+
+  // Start transcript early (reduces end-of-chat race conditions)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (!interviewStartedAtIsoRef.current) {
+      interviewStartedAtIsoRef.current = new Date().toISOString();
+      transcriptStartedAtRef.current = interviewStartedAtIsoRef.current;
+      void ensureTranscriptStarted(interviewStartedAtIsoRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Qualtrics summary helpers
 
@@ -463,19 +505,21 @@ export default function Home() {
       );
     }
 
+    // Fire-and-forget finalisation that survives navigation
+    void finalizeTranscriptOnce({
+      finalMessagesSnapshot: args.finalMessagesSnapshot,
+      finalThreadId: args.finalThreadId,
+      finishedReason,
+      durationSeconds,
+    });
+
+    // Then notify Qualtrics (Next gating)
     sendChatCompletionSummary({
       threadId: args.finalThreadId,
       messageCount: args.messageCount,
       userMessageCount: args.userMessageCount,
       durationSeconds,
       finishedReason,
-    });
-
-    void finalizeTranscriptOnce({
-      finalMessagesSnapshot: args.finalMessagesSnapshot,
-      finalThreadId: args.finalThreadId,
-      finishedReason,
-      durationSeconds,
     });
   }
 
@@ -852,6 +896,8 @@ export default function Home() {
       };
 
       mediaRecorderRef.current = mediaRecorder;
+      recordedChunksRef.current = [];
+
       mediaRecorder.start();
       setIsRecording(true);
 
