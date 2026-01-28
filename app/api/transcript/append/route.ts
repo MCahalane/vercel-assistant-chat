@@ -42,13 +42,13 @@ function isPlainObject(v: unknown): v is Record<string, any> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/**
- * Build a minimal metadata header:
- *
- * Metadata:
- * { ...json... }
- *
- */
+function safeLine(value: unknown) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/[\r\n\t]+/g, " ").slice(0, 200);
+}
+
 function buildMetadataHeader(metadata: Record<string, any>) {
   let jsonLine = "{}";
   try {
@@ -58,6 +58,61 @@ function buildMetadataHeader(metadata: Record<string, any>) {
   }
 
   return `Metadata:\n${jsonLine}\n\n`;
+}
+
+function extractParticipantId(body: any): string {
+  try {
+    const direct = safeLine(
+      body?.participantId ??
+        body?.ParticipantID ??
+        body?.participantID ??
+        body?.ParticipantId
+    );
+    if (direct) return direct;
+
+    const md = body?.metadata;
+    if (isPlainObject(md)) {
+      const fromMd = safeLine(
+        md.participantId ??
+          md.ParticipantID ??
+          md.participantID ??
+          md.ParticipantId
+      );
+      if (fromMd) return fromMd;
+    }
+
+    const fullText = typeof body?.fullText === "string" ? body.fullText : "";
+    if (fullText) {
+      const match = fullText.match(/^\s*ParticipantID:\s*(.+)\s*$/m);
+      if (match && match[1]) {
+        const parsed = safeLine(match[1]);
+        if (parsed) return parsed;
+      }
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function buildFinalHeader(args: {
+  transcriptId: string;
+  participantId?: string;
+  metadata?: Record<string, any>;
+}) {
+  const lines: string[] = [];
+  lines.push("Chat transcript");
+  lines.push(`TranscriptId: ${args.transcriptId}`);
+
+  if (args.participantId && args.participantId.trim()) {
+    lines.push(`ParticipantID: ${args.participantId.trim()}`);
+  }
+
+  lines.push("");
+
+  const metaBlock = args.metadata ? buildMetadataHeader(args.metadata) : "";
+  return lines.join("\n") + "\n" + metaBlock;
 }
 
 export async function POST(req: Request) {
@@ -77,11 +132,9 @@ export async function POST(req: Request) {
     const mode =
       typeof body?.mode === "string" ? body.mode.trim().toLowerCase() : "append";
 
-    // -----------------------
+    const participantId = extractParticipantId(body);
+
     // FINALIZE MODE
-    // -----------------------
-    // Payload:
-    // { transcriptId, mode: "finalize", fullText: string, metadata?: object }
     if (mode === "finalize") {
       const fullText = body?.fullText;
 
@@ -94,19 +147,56 @@ export async function POST(req: Request) {
 
       const safeTranscript = cleanTextBlock(fullText);
       if (!safeTranscript) {
+        console.log("TRANSCRIPT FINALIZE", {
+          transcriptId,
+          fullTextType: typeof fullText,
+          fullTextLen: typeof fullText === "string" ? fullText.length : null,
+          safeTranscriptLen: 0,
+          participantIdIncluded: !!(participantId && participantId.trim()),
+          metadataKeys: isPlainObject(body?.metadata) ? Object.keys(body.metadata) : null,
+          wrote: false,
+          reason: "safeTranscript empty after cleanTextBlock",
+        });
+
         return NextResponse.json({ ok: true, skipped: true });
       }
 
-      const metadata = isPlainObject(body?.metadata)
-        ? body.metadata
-        : undefined;
+      const metadata = isPlainObject(body?.metadata) ? body.metadata : undefined;
 
-      const header = metadata ? buildMetadataHeader(metadata) : "";
+      const finalMetadata =
+        metadata && isPlainObject(metadata)
+          ? {
+              ...metadata,
+              ParticipantID:
+                safeLine(metadata.ParticipantID) ||
+                safeLine(metadata.participantId) ||
+                participantId ||
+                "",
+            }
+          : metadata;
+
+      const header = buildFinalHeader({
+        transcriptId,
+        participantId,
+        metadata: finalMetadata,
+      });
+
       const transcriptBody = safeTranscript.endsWith("\n")
         ? safeTranscript
         : safeTranscript + "\n";
 
       const finalText = header + transcriptBody;
+
+      console.log("TRANSCRIPT FINALIZE", {
+        transcriptId,
+        fullTextType: typeof fullText,
+        fullTextLen: typeof fullText === "string" ? fullText.length : null,
+        safeTranscriptLen: safeTranscript.length,
+        finalTextLen: finalText.length,
+        participantIdIncluded: !!(participantId && participantId.trim()),
+        metadataKeys: finalMetadata ? Object.keys(finalMetadata) : null,
+        wrote: true,
+      });
 
       await put(path, finalText, {
         access: "public",
@@ -118,13 +208,12 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: true,
         mode: "finalize",
-        metadataIncluded: !!metadata,
+        metadataIncluded: !!finalMetadata,
+        participantIdIncluded: !!(participantId && participantId.trim()),
       });
     }
 
-    // -----------------------
     // APPEND MODE (LEGACY)
-    // -----------------------
     const ts = typeof body?.ts === "string" ? body.ts : new Date().toISOString();
 
     let newLine = "";
@@ -178,10 +267,17 @@ export async function POST(req: Request) {
     }
 
     if (!currentText) {
-      currentText =
-        `Chat transcript started\n` +
-        `TranscriptId: ${transcriptId}\n` +
-        `StartedAt: ${new Date().toISOString()}\n\n`;
+      const headerLines: string[] = [];
+      headerLines.push("Chat transcript started");
+      headerLines.push(`TranscriptId: ${transcriptId}`);
+      if (participantId && participantId.trim()) {
+        headerLines.push(`ParticipantID: ${participantId.trim()}`);
+      }
+      headerLines.push(`StartedAt: ${new Date().toISOString()}`);
+      headerLines.push("");
+      headerLines.push("");
+
+      currentText = headerLines.join("\n");
     }
 
     const updatedText = currentText + newLine;
@@ -193,7 +289,11 @@ export async function POST(req: Request) {
       allowOverwrite: true,
     });
 
-    return NextResponse.json({ ok: true, mode: "append" });
+    return NextResponse.json({
+      ok: true,
+      mode: "append",
+      participantIdIncluded: !!(participantId && participantId.trim()),
+    });
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, error: err?.message || "Failed to write transcript" },
