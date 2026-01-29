@@ -1,9 +1,9 @@
 .page {
   --background: #fafafa;
-  --foreground: #fff;
+  --foreground: #ffffff;
 
-  --text-primary: #000;
-  --text-secondary: #666;
+  --text-primary: #000000;
+  --text-secondary: #666666;
 
   --button-primary-hover: #383838;
   --button-secondary-hover: #f2f2f2;
@@ -25,7 +25,11 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  background-color: var(--foreground);
+
+  /* HARD LOCK CONTRAST */
+  background-color: #ffffff;
+  color: #000000;
+
   padding: 120px 60px;
 }
 
@@ -44,7 +48,7 @@
   line-height: 48px;
   letter-spacing: -2.4px;
   text-wrap: balance;
-  color: var(--text-primary);
+  color: #000000;
 }
 
 .intro p {
@@ -52,12 +56,12 @@
   font-size: 18px;
   line-height: 32px;
   text-wrap: balance;
-  color: var(--text-secondary);
+  color: #666666;
 }
 
 .intro a {
   font-weight: 500;
-  color: var(--text-primary);
+  color: #000000;
 }
 
 .ctas {
@@ -84,8 +88,8 @@
 }
 
 a.primary {
-  background: var(--text-primary);
-  color: var(--background);
+  background: #000000;
+  color: #ffffff;
   gap: 8px;
 }
 
@@ -93,7 +97,7 @@ a.secondary {
   border-color: var(--button-secondary-border);
 }
 
-/* Enable hover only on non-touch devices */
+/* Hover only on non-touch devices */
 @media (hover: hover) and (pointer: fine) {
   a.primary:hover {
     background: var(--button-primary-hover);
@@ -122,20 +126,13 @@ a.secondary {
   }
 }
 
+/* 🚫 Disable dark-mode overrides entirely */
 @media (prefers-color-scheme: dark) {
-  .logo {
-    filter: invert();
-  }
-
   .page {
-    --background: #000;
-    --foreground: #000;
+    --background: #fafafa;
+    --foreground: #ffffff;
 
-    --text-primary: #ededed;
-    --text-secondary: #999;
-
-    --button-primary-hover: #ccc;
-    --button-secondary-hover: #1a1a1a;
-    --button-secondary-border: #1a1a1a;
+    --text-primary: #000000;
+    --text-secondary: #666666;
   }
 }
