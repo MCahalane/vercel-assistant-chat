@@ -225,10 +225,7 @@ export default function Home() {
   // Transcript helpers (save once at end)
 
   function cleanBlock(s: string) {
-    return (s || "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .trim();
+    return (s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   }
 
   function buildFinalTranscript(args: {
@@ -242,7 +239,8 @@ export default function Home() {
     headerLines.push("Chat transcript");
     headerLines.push(`TranscriptId: ${args.transcriptId}`);
     headerLines.push(`StartedAt: ${args.startedAt}`);
-    if (args.participantId) headerLines.push(`ParticipantID: ${args.participantId}`);
+    if (args.participantId)
+      headerLines.push(`ParticipantID: ${args.participantId}`);
     if (args.threadId) headerLines.push(`ThreadId: ${args.threadId}`);
     headerLines.push("");
 
@@ -290,7 +288,8 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             startedAt: startedAtIso,
-            threadId: threadId && threadId.startsWith("thread_") ? threadId : null,
+            threadId:
+              threadId && threadId.startsWith("thread_") ? threadId : null,
             participantId:
               participantId && participantId.trim()
                 ? participantId.trim()
@@ -336,9 +335,7 @@ export default function Home() {
     if (transcriptFinalizedRef.current) return;
     transcriptFinalizedRef.current = true;
 
-    const started = await ensureTranscriptStarted(
-      interviewStartedAtIsoRef.current
-    );
+    const started = await ensureTranscriptStarted(interviewStartedAtIsoRef.current);
     if (!started.id) return;
 
     const interviewStartedAt =
@@ -346,8 +343,7 @@ export default function Home() {
       started.startedAt ||
       new Date().toISOString();
 
-    const interviewEndedAt =
-      interviewEndedAtIsoRef.current || new Date().toISOString();
+    const interviewEndedAt = interviewEndedAtIsoRef.current || new Date().toISOString();
 
     const transcriptWrittenAt = new Date().toISOString();
 
@@ -363,9 +359,8 @@ export default function Home() {
     });
 
     const messageCount = args.finalMessagesSnapshot.length;
-    const userMessageCount = args.finalMessagesSnapshot.filter(
-      (m) => m.role === "user"
-    ).length;
+    const userMessageCount = args.finalMessagesSnapshot.filter((m) => m.role === "user")
+      .length;
     const assistantMessageCount = args.finalMessagesSnapshot.filter(
       (m) => m.role === "assistant"
     ).length;
@@ -468,13 +463,9 @@ export default function Home() {
     }
 
     if (finishedReason === "INTERVIEW_FAILED") {
-      setInterviewStatus(
-        "This chat has ended. You may return to the survey and press Next."
-      );
+      setInterviewStatus("This chat has ended. You may return to the survey and press Next.");
     } else {
-      setInterviewStatus(
-        "Chat complete. You may return to the survey and press Next."
-      );
+      setInterviewStatus("Chat complete. You may return to the survey and press Next.");
     }
 
     sendChatCompletionSummary({
@@ -567,10 +558,9 @@ export default function Home() {
       if (!data || typeof data !== "object") {
         const assistantErrMsg: ChatMsg = {
           role: "assistant",
-          text:
-            res.ok
-              ? "The server returned an unexpected response format. Please try again."
-              : `Server error (${res.status}). Please try again.`,
+          text: res.ok
+            ? "The server returned an unexpected response format. Please try again."
+            : `Server error (${res.status}). Please try again.`,
         };
 
         const nextMessagesAfterErr = [...nextMessagesAfterUser, assistantErrMsg];
@@ -699,8 +689,7 @@ export default function Home() {
           const x = i * step + step / 2;
           const maxBarHeight = height * 0.9;
           const minBarHeight = height * 0.2;
-          const barHeight =
-            minBarHeight + Math.random() * (maxBarHeight - minBarHeight);
+          const barHeight = minBarHeight + Math.random() * (maxBarHeight - minBarHeight);
 
           const yTop = height / 2 - barHeight / 2;
           const yBottom = height / 2 + barHeight / 2;
@@ -830,11 +819,7 @@ export default function Home() {
         const TOO_SHORT_MS = 800;
         const TOO_QUIET_THRESHOLD = 0.08;
 
-        if (
-          !durationMs ||
-          durationMs < TOO_SHORT_MS ||
-          maxAmplitude < TOO_QUIET_THRESHOLD
-        ) {
+        if (!durationMs || durationMs < TOO_SHORT_MS || maxAmplitude < TOO_QUIET_THRESHOLD) {
           showCouldNotUnderstand();
           return;
         }
@@ -870,10 +855,7 @@ export default function Home() {
       setIsRecording(true);
 
       setTimeout(() => {
-        if (
-          mediaRecorderRef.current === mediaRecorder &&
-          mediaRecorder.state === "recording"
-        ) {
+        if (mediaRecorderRef.current === mediaRecorder && mediaRecorder.state === "recording") {
           mediaRecorder.stop();
           setIsRecording(false);
         }
@@ -899,9 +881,7 @@ export default function Home() {
     setIsRecording(false);
   }
 
-  async function sendAudioForTranscription(
-    audioBlob: Blob
-  ): Promise<string | null> {
+  async function sendAudioForTranscription(audioBlob: Blob): Promise<string | null> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -940,9 +920,10 @@ export default function Home() {
     flexShrink: 0,
   };
 
-  const textareaPlaceholder = isTranscribing
-    ? "Transcribing audio…"
-    : "Type your message...";
+  const textareaPlaceholder = isTranscribing ? "Transcribing audio…" : "Type your message...";
+
+  const MAIN_TEXT_COLOR = "#111827";
+  const PAGE_BG_COLOR = "#ffffff";
 
   return (
     <main
@@ -951,6 +932,9 @@ export default function Home() {
         margin: "40px auto",
         padding: 16,
         fontFamily: "system-ui, Arial",
+        color: MAIN_TEXT_COLOR,
+        backgroundColor: PAGE_BG_COLOR,
+        colorScheme: "light",
       }}
     >
       <style>{`
@@ -985,13 +969,15 @@ export default function Home() {
         .typingDot:nth-child(3) { animation-delay: 0.3s; }
       `}</style>
 
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>AI-Assisted Chat</h1>
+      <h1 style={{ fontSize: 22, marginBottom: 4, color: MAIN_TEXT_COLOR }}>
+        AI-Assisted Chat
+      </h1>
 
       <p
         style={{
           fontStyle: "italic",
           marginBottom: 12,
-          color: "#444",
+          color: "#374151",
         }}
       >
         {interviewStatus}
@@ -1006,10 +992,11 @@ export default function Home() {
           height: 420,
           overflowY: "auto",
           background: "#fafafa",
+          color: MAIN_TEXT_COLOR,
         }}
       >
         {messages.length === 0 && !isLoading && (
-          <p style={{ color: "#666" }}>
+          <p style={{ color: "#4b5563" }}>
             When you’re ready, you can start by saying hello.
           </p>
         )}
@@ -1058,6 +1045,7 @@ export default function Home() {
                       whiteSpace: "pre-wrap",
                       fontSize: 14,
                       lineHeight: 1.4,
+                      color: MAIN_TEXT_COLOR,
                     }}
                   >
                     {m.text}
@@ -1091,9 +1079,7 @@ export default function Home() {
                 alignItems: "flex-start",
               }}
             >
-              <span
-                style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}
-              >
+              <span style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
                 AI Assistant
               </span>
               <div
@@ -1160,7 +1146,9 @@ export default function Home() {
             maxHeight: 200,
             resize: "none",
             overflowY: "auto",
-            background: isTranscribing ? "#f3f4f6" : "white",
+            background: isTranscribing ? "#f3f4f6" : "#ffffff",
+            color: MAIN_TEXT_COLOR,
+            caretColor: MAIN_TEXT_COLOR,
           }}
         />
         <button
@@ -1178,12 +1166,10 @@ export default function Home() {
             borderRadius: 6,
             border: "1px solid #ccc",
             background: isRecording ? "#b91c1c" : "#f9fafb",
-            color: isRecording ? "white" : "inherit",
+            color: isRecording ? "white" : MAIN_TEXT_COLOR,
             fontSize: 18,
             cursor: isLoading || isTranscribing ? "default" : "pointer",
-            animation: isRecording
-              ? "pulseRecording 1.2s ease-in-out infinite"
-              : "none",
+            animation: isRecording ? "pulseRecording 1.2s ease-in-out infinite" : "none",
             transformOrigin: "center",
             opacity: isLoading || isTranscribing ? 0.7 : 1,
           }}
@@ -1198,16 +1184,12 @@ export default function Home() {
             borderRadius: 6,
             border: "none",
             background:
-              isLoading || isTranscribing || !input.trim()
-                ? "#6b7280"
-                : "#111827",
+              isLoading || isTranscribing || !input.trim() ? "#6b7280" : "#111827",
             opacity: isLoading || isTranscribing || !input.trim() ? 0.7 : 1,
             color: "white",
             fontSize: 16,
             cursor:
-              isLoading || isTranscribing || !input.trim()
-                ? "default"
-                : "pointer",
+              isLoading || isTranscribing || !input.trim() ? "default" : "pointer",
           }}
         >
           {isLoading ? "Sending…" : "Send"}
